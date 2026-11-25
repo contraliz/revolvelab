@@ -139,6 +139,17 @@ V_C=\pi\int_0^4\left[25-\left(5-(-x^2+4x)\right)^2\right]dx
 - **3D coordinate frame** draws faint neutral \(x\), \(y\), and \(z\) axes with small numbered tick marks that scale with zoom, plus floor and vertical grid planes alongside the orange rotation axis.
 - Keyboard: `1` `2` `3` switch axes, `Space` play/pause, `4` cutaway, `F` frame, `G` grid, `W` wireframe, `X` X-ray, `N` new problem.
 
+## Light concept mockups
+
+The app itself stays dark. The light 3D Desmos explorations are preserved as
+standalone coded mockups in `public/concepts/light-directions.html`, with
+**Paper** and **Fog** palettes. With the dev server running, open
+`/concepts/light-directions.html`.
+
+![Light 3D Desmos concept directions](concept-light-directions.png)
+
+These are design studies only. The live app uses the dark theme.
+
 ## Geometry notes
 
 The renderer builds surfaces of revolution from radial inner/outer profiles over

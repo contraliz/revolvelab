@@ -1297,11 +1297,10 @@ input:focus-visible {
   align-items: center;
   gap: 7px;
   padding: 4px;
-  background: rgba(18, 22, 27, 0.86);
+  background: rgba(18, 22, 27, 0.95);
   border: 1px solid #2b333c;
   border-radius: 4px;
   transform: translateY(-5px);
-  backdrop-filter: blur(8px);
 }
 
 .shading-group {
@@ -1378,11 +1377,10 @@ input:focus-visible {
   align-items: center;
   gap: 9px;
   padding: 8px 10px;
-  background: rgba(17, 21, 26, 0.78);
+  background: rgba(17, 21, 26, 0.94);
   border: 1px solid rgba(255, 153, 80, 0.18);
   border-radius: 3px;
   transform: translateY(5px);
-  backdrop-filter: blur(7px);
 }
 
 .axis-glyph {
@@ -1424,12 +1422,11 @@ input:focus-visible {
   left: 50%;
   width: min(760px, calc(100% - 250px));
   padding: 11px 13px 9px;
-  background: rgba(17, 21, 26, 0.9);
+  background: rgba(17, 21, 26, 0.96);
   border: 1px solid #2e3640;
   border-radius: 4px;
   box-shadow: 0 14px 50px rgba(0, 0, 0, 0.34);
   transform: translate(-50%, 7px);
-  backdrop-filter: blur(10px);
 }
 
 .is-3d .timeline-dock {

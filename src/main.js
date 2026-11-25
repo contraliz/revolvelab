@@ -58,6 +58,7 @@ const state = {
   lastTime: performance.now(),
   fpsFrames: 0,
   fpsWindowStart: performance.now(),
+  lowFpsWindows: 0,
   animationFrame: 0,
   needsRender: true,
   lastTriangleUpdate: 0,
@@ -403,12 +404,20 @@ function updateFps(now) {
   }
   const active = state.interacting || state.playing || Boolean(state.cameraTween);
   if (active && fps > 0) {
-    if (fps < 50 && renderScale > 1.0) {
-      setRenderScale(Math.max(1.0, renderScale - 0.15));
-    } else if (fps < 38 && renderScale > 0.85) {
-      setRenderScale(0.85);
-    } else if (fps < 30 && renderScale > 0.75) {
-      setRenderScale(0.75);
+    if (fps < 50) {
+      state.lowFpsWindows += 1;
+    } else {
+      state.lowFpsWindows = 0;
+    }
+    if (state.lowFpsWindows >= 2) {
+      state.lowFpsWindows = 0;
+      if (renderScale > 1.0) {
+        setRenderScale(Math.max(1.0, renderScale - 0.15));
+      } else if (fps < 38 && renderScale > 0.85) {
+        setRenderScale(0.85);
+      } else if (fps < 30 && renderScale > 0.75) {
+        setRenderScale(0.75);
+      }
     }
   }
   state.fpsFrames = 0;
@@ -933,6 +942,7 @@ function generateSolid() {
   }
 
   state.stale = false;
+  state.lowFpsWindows = 0;
   $("#generateLabel").textContent = "Update solid";
   const first3d = state.view !== "3d";
   setView("3d", { stopPlayback: true, frame: false });
@@ -1071,6 +1081,7 @@ function setSweep(degrees, options = {}) {
 function setPlaying(playing) {
   if (playing) {
     if (state.view !== "3d") return;
+    state.lowFpsWindows = 0;
     if (state.sweep >= 359.5) setSweep(0, { ui: true, quiet: true });
     $("#timelineDock").classList.add("playing");
   } else {

@@ -133,6 +133,7 @@ V_C=\pi\int_0^4\left[25-\left(5-(-x^2+4x)\right)^2\right]dx
 - **Shading** switches between material preview, X-ray, and wireframe.
 - **Washers** displays a midpoint Riemann approximation with adjustable slice count.
 - **Profile / Full solid** snaps back to the source region or the completed solid.
+- **Viewport presets** repeat the `Profile` and `360°` actions in the top-right viewport toolbar.
 - **Generating region graph** shows a color-coded 2D graph of \(f(x)\), \(g(x)\), and the rotation line.
 - **Coordinate axes** \(x\), \(y\), and \(z\) are drawn in the viewport alongside the orange rotation axis.
 - Keyboard: `1` `2` `3` switch axes, `Space` play/pause, `4` cutaway, `F` frame, `G` grid, `W` wireframe, `X` X-ray, `N` new problem.

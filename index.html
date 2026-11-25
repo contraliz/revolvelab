@@ -14,6 +14,16 @@
   <body>
     <div class="app-shell">
       <header class="topbar">
+        <button
+          class="panel-toggle"
+          id="panelToggle"
+          aria-label="Toggle properties panel"
+          aria-expanded="false"
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+            <path d="M4 7h16M4 12h16M4 17h10"/>
+          </svg>
+        </button>
         <div class="brand">
           <span class="brand-mark" aria-hidden="true">
             <svg viewBox="0 0 24 24" fill="none">
@@ -88,16 +98,6 @@
           >
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
               <path d="M8.5 3.5h-5v5m16-5h-5m5 0v5m-16 11h5m-5-5v5m16-5v5h-5"/>
-            </svg>
-          </button>
-          <button
-            class="panel-toggle"
-            id="panelToggle"
-            aria-label="Toggle properties panel"
-            aria-expanded="false"
-          >
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-              <path d="M4 7h16M4 12h16M4 17h10"/>
             </svg>
           </button>
         </div>
@@ -205,6 +205,23 @@
                 <path d="M4.3 9.2A8.2 8.2 0 1 1 4 14.7M4.3 9.2V4.4m0 4.8h4.8"/>
               </svg>
             </button>
+            <span class="toolbar-divider"></span>
+            <div class="view-angle-group" role="group" aria-label="Revolve presets">
+              <button
+                class="view-angle-button"
+                data-angle="0"
+                data-tooltip="Profile view · 0°"
+              >
+                Profile
+              </button>
+              <button
+                class="view-angle-button"
+                data-angle="360"
+                data-tooltip="Full revolution · 360°"
+              >
+                360°
+              </button>
+            </div>
           </div>
 
           <div class="axis-chip">

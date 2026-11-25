@@ -294,19 +294,16 @@ axisVisual.add(rightTip);
 const coordinateAxesGroup = new THREE.Group();
 scene.add(coordinateAxesGroup);
 
-const coordinatePalette = {
-  x: 0xff7a6e,
-  y: 0x73e3a1,
-  z: 0x7fb2ff,
-};
+const axisColor = 0xc3ccd6;
+const axisLabelColor = "#cfd7e1";
 
-function makeCoordinateShaft(color) {
-  return new THREE.Mesh(
-    new THREE.CylinderGeometry(1, 1, 1, 12),
-    new THREE.MeshBasicMaterial({
-      color,
+function makeCoordinateLine() {
+  return new THREE.Line(
+    new THREE.BufferGeometry(),
+    new THREE.LineBasicMaterial({
+      color: axisColor,
       transparent: true,
-      opacity: 0.92,
+      opacity: 0.36,
       depthTest: false,
       depthWrite: false,
       toneMapped: false,
@@ -314,41 +311,19 @@ function makeCoordinateShaft(color) {
   );
 }
 
-function makeCoordinateArrow(color) {
-  return new THREE.Mesh(
-    new THREE.ConeGeometry(0.055, 0.2, 12),
-    new THREE.MeshBasicMaterial({
-      color,
-      transparent: true,
-      opacity: 0.9,
-      depthTest: false,
-      depthWrite: false,
-      toneMapped: false,
-    }),
-  );
-}
-
-function makeCoordinateBadge(letter, color) {
+function makeCoordinateBadge(letter) {
   const canvas = document.createElement("canvas");
   canvas.width = 128;
   canvas.height = 128;
   const ctx = canvas.getContext("2d");
   ctx.clearRect(0, 0, 128, 128);
-  ctx.beginPath();
-  if (typeof ctx.roundRect === "function") {
-    ctx.roundRect(28, 28, 72, 72, 12);
-  } else {
-    ctx.rect(28, 28, 72, 72);
-  }
-  ctx.fillStyle = "rgba(12, 15, 19, 0.8)";
-  ctx.fill();
-  ctx.lineWidth = 3;
-  ctx.strokeStyle = color;
-  ctx.stroke();
-  ctx.fillStyle = color;
-  ctx.font = '600 52px "MesloLGS Nerd Font", monospace';
+  ctx.font = '600 58px "MesloLGS Nerd Font", monospace';
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
+  ctx.lineWidth = 7;
+  ctx.strokeStyle = "rgba(8, 11, 15, 0.9)";
+  ctx.fillStyle = axisLabelColor;
+  ctx.strokeText(letter, 64, 68);
   ctx.fillText(letter, 64, 68);
 
   const texture = new THREE.CanvasTexture(canvas);
@@ -358,48 +333,39 @@ function makeCoordinateBadge(letter, color) {
     new THREE.SpriteMaterial({
       map: texture,
       transparent: true,
+      opacity: 0.78,
       depthTest: false,
       depthWrite: false,
       toneMapped: false,
     }),
   );
-  sprite.scale.set(0.62, 0.62, 1);
+  sprite.scale.set(0.44, 0.44, 1);
   sprite.renderOrder = 32;
   return sprite;
 }
 
-const coordXShaft = makeCoordinateShaft(coordinatePalette.x);
-const coordYShaft = makeCoordinateShaft(coordinatePalette.y);
-const coordZShaft = makeCoordinateShaft(coordinatePalette.z);
-coordXShaft.rotation.z = -Math.PI / 2;
-coordZShaft.rotation.x = Math.PI / 2;
-const coordXArrow = makeCoordinateArrow(coordinatePalette.x);
-const coordYArrow = makeCoordinateArrow(coordinatePalette.y);
-const coordZArrow = makeCoordinateArrow(coordinatePalette.z);
-coordXArrow.rotation.z = -Math.PI / 2;
-coordZArrow.rotation.x = Math.PI / 2;
-const coordXBadge = makeCoordinateBadge("x", "#ff958a");
-const coordYBadge = makeCoordinateBadge("y", "#8cf0b7");
-const coordZBadge = makeCoordinateBadge("z", "#9ec4ff");
+const coordXLine = makeCoordinateLine();
+const coordYLine = makeCoordinateLine();
+const coordZLine = makeCoordinateLine();
+const coordXBadge = makeCoordinateBadge("x");
+const coordYBadge = makeCoordinateBadge("y");
+const coordZBadge = makeCoordinateBadge("z");
 coordinateAxesGroup.add(
-  coordXShaft,
-  coordYShaft,
-  coordZShaft,
-  coordXArrow,
-  coordYArrow,
-  coordZArrow,
+  coordXLine,
+  coordYLine,
+  coordZLine,
   coordXBadge,
   coordYBadge,
   coordZBadge,
 );
 
-function makeCoordinateTicks(color) {
+function makeCoordinateTicks() {
   return new THREE.LineSegments(
     new THREE.BufferGeometry(),
     new THREE.LineBasicMaterial({
-      color,
+      color: axisColor,
       transparent: true,
-      opacity: 0.58,
+      opacity: 0.22,
       depthTest: false,
       depthWrite: false,
       toneMapped: false,
@@ -407,19 +373,18 @@ function makeCoordinateTicks(color) {
   );
 }
 
-const coordXTicks = makeCoordinateTicks(coordinatePalette.x);
-const coordYTicks = makeCoordinateTicks(coordinatePalette.y);
-const coordZTicks = makeCoordinateTicks(coordinatePalette.z);
+const coordXTicks = makeCoordinateTicks();
+const coordYTicks = makeCoordinateTicks();
+const coordZTicks = makeCoordinateTicks();
 coordinateAxesGroup.add(coordXTicks, coordYTicks, coordZTicks);
 
 const coordinateLabelsGroup = new THREE.Group();
 coordinateAxesGroup.add(coordinateLabelsGroup);
 const numberTextureCache = new Map();
 
-function setCoordinateShaft(mesh, start, end, radius) {
-  const length = start.distanceTo(end);
-  mesh.position.copy(start).add(end).multiplyScalar(0.5);
-  mesh.scale.set(radius, length, radius);
+function setCoordinateLine(line, points) {
+  line.geometry.dispose();
+  line.geometry = new THREE.BufferGeometry().setFromPoints(points);
 }
 
 function makeNumberSprite(text, color, scale) {
@@ -449,6 +414,8 @@ function makeNumberSprite(text, color, scale) {
     new THREE.SpriteMaterial({
       map: texture,
       transparent: true,
+      opacity: 0.9,
+      sizeAttenuation: true,
       depthTest: false,
       depthWrite: false,
       toneMapped: false,
@@ -488,7 +455,15 @@ function updateCoordinateNumbers(
   scale,
 ) {
   clearCoordinateLabels();
-  const labelScale = clamp(scale * 1.05, 0.56, 1.1);
+  const labelScale = clamp(scale * 0.95, 0.38, 0.68);
+  const axisExtent = 30;
+  const majorStep = 5;
+  const round = (value) => Math.round(value * 1e6) / 1e6;
+  const addValues = (values, start, end, step) => {
+    for (let value = Math.ceil(start / step) * step; value <= end + 1e-6; value += step) {
+      values.add(round(value));
+    }
+  };
 
   if (xStart <= 0 && xEnd >= 0) {
     const zero = makeNumberSprite("0", "#c6cdd6", labelScale * 0.88);
@@ -496,24 +471,30 @@ function updateCoordinateNumbers(
     coordinateLabelsGroup.add(zero);
   }
 
-  const xStep = labelStepFor(xStart, xEnd);
-  for (let x = Math.ceil(xStart / xStep) * xStep; x <= xEnd + 1e-6; x += xStep) {
+  const xValues = new Set();
+  addValues(xValues, xStart, xEnd, labelStepFor(xStart, xEnd));
+  addValues(xValues, -axisExtent, axisExtent, majorStep);
+  for (const x of [...xValues].sort((a, b) => a - b)) {
     if (Math.abs(x) < 1e-6) continue;
     const sprite = makeNumberSprite(formatAxisNumber(x), "#e9eef5", labelScale);
     sprite.position.set(x, -0.3, 0);
     coordinateLabelsGroup.add(sprite);
   }
 
-  const yStep = labelStepFor(yStart, yEnd);
-  for (let y = Math.ceil(yStart / yStep) * yStep; y <= yEnd + 1e-6; y += yStep) {
+  const yValues = new Set();
+  addValues(yValues, yStart, yEnd, labelStepFor(yStart, yEnd));
+  addValues(yValues, -axisExtent, axisExtent, majorStep);
+  for (const y of [...yValues].sort((a, b) => a - b)) {
     if (Math.abs(y) < 1e-6) continue;
     const sprite = makeNumberSprite(formatAxisNumber(y), "#e9eef5", labelScale);
     sprite.position.set(anchorX - 0.32, y, 0);
     coordinateLabelsGroup.add(sprite);
   }
 
-  const zStep = labelStepFor(zStart, zEnd);
-  for (let z = Math.ceil(zStart / zStep) * zStep; z <= zEnd + 1e-6; z += zStep) {
+  const zValues = new Set();
+  addValues(zValues, zStart, zEnd, labelStepFor(zStart, zEnd));
+  addValues(zValues, -axisExtent, axisExtent, majorStep);
+  for (const z of [...zValues].sort((a, b) => a - b)) {
     if (Math.abs(z) < 1e-6) continue;
     const sprite = makeNumberSprite(formatAxisNumber(z), "#e9eef5", labelScale);
     sprite.position.set(anchorX, 0.3, z);
@@ -535,7 +516,7 @@ function tickStepFor(start, end) {
 
 function updateCoordinateTicks(anchorX, xStart, xEnd, yStart, yEnd, zStart, zEnd) {
   const span = Math.max(xEnd - xStart, yEnd - yStart, zEnd - zStart);
-  const baseTick = clamp(span * 0.015, 0.06, 0.14);
+  const baseTick = clamp(span * 0.01, 0.035, 0.08);
 
   const xPoints = [];
   const xStep = tickStepFor(xStart, xEnd);
@@ -585,53 +566,35 @@ function updateCoordinateAxes(problem) {
   const zStart = -maxRadius - 0.35;
   const zEnd = maxRadius + 0.55;
 
-  const axisRadius = clamp(
-    Math.max(xHigh - xLow, maxRadius) * 0.0038,
-    0.014,
-    0.03,
-  );
+  const axisExtent = 30;
 
-  setCoordinateShaft(
-    coordXShaft,
-    new THREE.Vector3(xStart, 0, 0),
-    new THREE.Vector3(xEnd, 0, 0),
-    axisRadius,
-  );
-  setCoordinateShaft(
-    coordYShaft,
-    new THREE.Vector3(anchorX, yStart, 0),
-    new THREE.Vector3(anchorX, yEnd, 0),
-    axisRadius,
-  );
-  setCoordinateShaft(
-    coordZShaft,
-    new THREE.Vector3(anchorX, 0, zStart),
-    new THREE.Vector3(anchorX, 0, zEnd),
-    axisRadius,
-  );
+  setCoordinateLine(coordXLine, [
+    new THREE.Vector3(-axisExtent, 0, 0),
+    new THREE.Vector3(axisExtent, 0, 0),
+  ]);
+  setCoordinateLine(coordYLine, [
+    new THREE.Vector3(anchorX, -axisExtent, 0),
+    new THREE.Vector3(anchorX, axisExtent, 0),
+  ]);
+  setCoordinateLine(coordZLine, [
+    new THREE.Vector3(anchorX, 0, -axisExtent),
+    new THREE.Vector3(anchorX, 0, axisExtent),
+  ]);
 
   updateCoordinateTicks(
     anchorX,
-    xStart,
-    xEnd,
-    yStart,
-    yEnd,
-    zStart,
-    zEnd,
+    -axisExtent,
+    axisExtent,
+    -axisExtent,
+    axisExtent,
+    -axisExtent,
+    axisExtent,
   );
 
-  const arrowScale = clamp(Math.max(xHigh - xLow, maxRadius) * 0.045, 0.65, 1.8);
-  for (const arrow of [coordXArrow, coordYArrow, coordZArrow]) {
-    arrow.scale.setScalar(arrowScale);
-  }
-  coordXArrow.position.set(xEnd, 0, 0);
-  coordYArrow.position.set(anchorX, yEnd, 0);
-  coordZArrow.position.set(anchorX, 0, zEnd);
-
-  const badgeScale = clamp(Math.max(xHigh - xLow, maxRadius) * 0.085, 0.58, 1.1);
-  coordXBadge.position.set(xEnd + 0.18, 0.28, 0);
-  coordYBadge.position.set(anchorX + 0.26, yEnd - 0.02, 0);
-  coordZBadge.position.set(anchorX + 0.26, 0.28, zEnd);
+  const badgeScale = clamp(Math.max(xHigh - xLow, maxRadius) * 0.06, 0.4, 0.65);
+  coordXBadge.position.set(xEnd + 0.26, 0.26, 0);
+  coordYBadge.position.set(anchorX + 0.22, yEnd + 0.04, 0);
+  coordZBadge.position.set(anchorX + 0.22, 0.26, zEnd + 0.08);
   for (const badge of [coordXBadge, coordYBadge, coordZBadge]) {
     badge.scale.set(badgeScale, badgeScale, 1);
   }

@@ -136,7 +136,7 @@ V_C=\pi\int_0^4\left[25-\left(5-(-x^2+4x)\right)^2\right]dx
 - **Profile / Full solid** snaps back to the source region or the completed solid.
 - **Viewport presets** repeat the `Profile` and `360°` actions in the top-right viewport toolbar.
 - **Generating region graph** shows a color-coded 2D graph of \(f(x)\), \(g(x)\), and the rotation line.
-- **3D coordinate frame** draws \(x\), \(y\), and \(z\) axes with numbered tick marks, plus floor and vertical grid planes alongside the orange rotation axis.
+- **3D coordinate frame** draws faint neutral \(x\), \(y\), and \(z\) axes with small numbered tick marks that scale with zoom, plus floor and vertical grid planes alongside the orange rotation axis.
 - Keyboard: `1` `2` `3` switch axes, `Space` play/pause, `4` cutaway, `F` frame, `G` grid, `W` wireframe, `X` X-ray, `N` new problem.
 
 ## Geometry notes

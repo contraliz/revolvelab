@@ -1,3 +1,19 @@
+@font-face {
+  font-family: "MesloLGS Nerd Font";
+  src: url("/fonts/MesloLGSNerdFont-Regular.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "MesloLGS Nerd Font";
+  src: url("/fonts/MesloLGSNerdFont-Bold.woff2") format("woff2");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
 :root {
   color-scheme: dark;
   --bg: #0d1013;
@@ -17,11 +33,12 @@
   --green: #73dda8;
   --red: #ed7b6d;
   --blue: #6e9fff;
-  --mono: "SFMono-Regular", "Cascadia Mono", "Roboto Mono", Menlo, Consolas,
-    monospace;
-  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto,
-    Helvetica, Arial, sans-serif;
-  --serif: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+  --font: "MesloLGS Nerd Font", "MesloLGS NF", "MesloLGS Nerd Font Mono",
+    "CaskaydiaCove Nerd Font", "JetBrainsMono Nerd Font", ui-monospace,
+    "SFMono-Regular", Menlo, Consolas, monospace;
+  --mono: var(--font);
+  --sans: var(--font);
+  --serif: var(--font);
   --radius: 6px;
 }
 
@@ -259,9 +276,9 @@ input:focus-visible {
 .live-dot {
   width: 5px;
   height: 5px;
-  border-radius: 50%;
+  border-radius: 1px;
   background: var(--green);
-  box-shadow: 0 0 8px rgba(115, 221, 168, 0.75);
+  box-shadow: 0 0 8px rgba(115, 221, 168, 0.55);
 }
 
 .topbar-tools {
@@ -365,7 +382,7 @@ input:focus-visible {
 .workspace {
   min-height: 0;
   display: grid;
-  grid-template-columns: 350px 48px minmax(0, 1fr);
+  grid-template-columns: 304px 48px minmax(0, 1fr);
 }
 
 .toolrail {
@@ -530,9 +547,9 @@ input:focus-visible {
 .scene-dot {
   width: 6px;
   height: 6px;
-  border-radius: 50%;
+  border-radius: 1px;
   background: var(--accent);
-  box-shadow: 0 0 10px rgba(255, 153, 80, 0.85);
+  box-shadow: 0 0 10px rgba(255, 153, 80, 0.6);
 }
 
 .scene-title-row h2 {
@@ -851,11 +868,11 @@ input:focus-visible {
 }
 
 .graph-live {
-  width: 4px;
-  height: 4px;
+  width: 9px;
+  height: 2px;
   background: #5ca7df;
-  border-radius: 50%;
-  box-shadow: 0 0 7px rgba(92, 167, 223, 0.7);
+  border-radius: 1px;
+  box-shadow: 0 0 7px rgba(92, 167, 223, 0.45);
 }
 
 .graph-badge {
@@ -960,9 +977,9 @@ input:focus-visible {
 }
 
 .curve-dot {
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
+  width: 10px;
+  height: 2px;
+  border-radius: 1px;
 }
 
 .curve-dot.upper {
@@ -974,8 +991,12 @@ input:focus-visible {
 }
 
 .curve-dot.rotation {
-  background: transparent;
-  border: 1px solid #ff9b54;
+  background: repeating-linear-gradient(
+    90deg,
+    #ff9b54 0 3px,
+    transparent 3px 5px
+  );
+  border: 0;
 }
 
 .graph-scale {
@@ -1024,11 +1045,11 @@ input:focus-visible {
 }
 
 .timeline-pulse {
-  width: 4px;
-  height: 4px;
-  border-radius: 50%;
+  width: 2px;
+  height: 7px;
+  border-radius: 1px;
   background: var(--accent);
-  box-shadow: 0 0 7px rgba(255, 153, 80, 0.8);
+  box-shadow: 0 0 7px rgba(255, 153, 80, 0.65);
 }
 
 .timeline-angle {
@@ -2149,8 +2170,8 @@ input:focus-visible {
   width: 4px;
   height: 4px;
   background: var(--green);
-  border-radius: 50%;
-  box-shadow: 0 0 6px rgba(115, 221, 168, 0.6);
+  border-radius: 1px;
+  box-shadow: 0 0 6px rgba(115, 221, 168, 0.45);
 }
 
 .status-sep {
@@ -2421,9 +2442,9 @@ kbd {
   width: 5px;
   height: 5px;
   margin-right: 6px;
-  border-radius: 50%;
+  border-radius: 1px;
   background: var(--accent);
-  box-shadow: 0 0 8px rgba(255, 153, 80, 0.7);
+  box-shadow: 0 0 8px rgba(255, 153, 80, 0.55);
   vertical-align: 1px;
 }
 
@@ -2763,6 +2784,492 @@ kbd {
 }
 
 /* -------------------------------------------------------------------------- */
+/* Desmos-inspired compact sidebar                                            */
+/* -------------------------------------------------------------------------- */
+
+.panel {
+  --desmos-bg: #16191e;
+  --desmos-card: #1d2127;
+  --desmos-card-raised: #22272e;
+  --desmos-line: #2b323a;
+  --desmos-line-strong: #3a434e;
+  --desmos-text: #e7ebef;
+  --desmos-muted: #8b949f;
+  --desmos-faint: #626c78;
+  --desmos-blue: #63a9e8;
+  --desmos-blue-soft: rgba(74, 144, 206, 0.14);
+  --desmos-blue-line: rgba(99, 169, 232, 0.38);
+  color: var(--desmos-text);
+  background: var(--desmos-bg);
+  border-right-color: #2b323a;
+  box-shadow: 10px 0 32px rgba(0, 0, 0, 0.28);
+}
+
+.panel .panel-hero {
+  padding: 10px 12px 9px;
+  background: linear-gradient(180deg, #1a1e24, #171a1f);
+  border-bottom-color: #252b33;
+}
+
+.panel .region-card {
+  gap: 2px;
+  padding: 8px 10px;
+  background: var(--desmos-card);
+  border-color: var(--desmos-line);
+  border-radius: 7px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.02);
+}
+
+.panel .region-equation {
+  color: var(--desmos-text);
+  font-family: var(--serif);
+  font-size: 14px;
+  line-height: 1.25;
+  letter-spacing: 0;
+}
+
+.panel .region-domain {
+  color: var(--desmos-muted);
+  font-family: var(--sans);
+  font-size: 8.5px;
+  letter-spacing: 0.01em;
+}
+
+.panel .region-domain span {
+  color: #5a646f;
+}
+
+.panel .panel-scroll {
+  scrollbar-color: #3a424b transparent;
+}
+
+.panel .panel-scroll::-webkit-scrollbar-thumb {
+  background: #3a424b;
+  border-color: var(--desmos-bg);
+}
+
+.panel .panel-section {
+  padding: 10px 12px;
+  border-bottom-color: #252b33;
+}
+
+.panel .section-heading {
+  margin-bottom: 7px;
+  color: #aeb7c2;
+  font-size: 9.5px;
+  font-weight: 600;
+}
+
+.panel .section-heading b {
+  margin-right: 4px;
+  color: var(--desmos-blue);
+  font-size: 7px;
+}
+
+.panel .section-heading small {
+  color: var(--desmos-faint);
+  font-size: 7px;
+}
+
+.panel .case-list {
+  gap: 3px;
+}
+
+.panel .case-button {
+  gap: 8px;
+  padding: 6px 8px;
+  background: #1b1f25;
+  border-color: #2a3038;
+  border-radius: 7px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.018);
+}
+
+.panel .case-button:hover {
+  background: #20252c;
+  border-color: #3b4652;
+}
+
+.panel .case-button.active {
+  background:
+    linear-gradient(90deg, rgba(99, 169, 232, 0.08), transparent 72%),
+    #1b1f25;
+  border-color: #3f6f9f;
+  box-shadow: inset 0 0 0 1px rgba(99, 169, 232, 0.08);
+}
+
+.panel .case-button::before {
+  top: 6px;
+  bottom: 6px;
+  width: 3px;
+  background: var(--desmos-blue);
+  border-radius: 0 2px 2px 0;
+}
+
+.panel .case-letter {
+  width: auto;
+  height: auto;
+  color: var(--desmos-blue);
+  font-size: 9px;
+  font-weight: 700;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+}
+
+.panel .case-button[data-case="b"] .case-letter {
+  color: #63c47a;
+}
+
+.panel .case-button[data-case="c"] .case-letter {
+  color: #e0a05a;
+}
+
+.panel .case-button.active .case-letter {
+  color: var(--desmos-blue);
+  background: transparent;
+  border-color: transparent;
+}
+
+.panel .case-button[data-case="b"].active .case-letter {
+  color: #63c47a;
+}
+
+.panel .case-button[data-case="c"].active .case-letter {
+  color: #e0a05a;
+}
+
+.panel .case-copy strong {
+  color: #e2e7ed;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.panel .case-copy small {
+  color: #89929d;
+  font-size: 8px;
+}
+
+.panel .case-value {
+  color: var(--desmos-muted);
+  font-size: 8.5px;
+}
+
+.panel .case-button.active .case-value {
+  color: var(--desmos-blue);
+}
+
+.panel .case-chevron {
+  color: #5f6975;
+  font-size: 13px;
+}
+
+.panel .build-problem-button {
+  gap: 8px;
+  margin-top: 5px;
+  padding: 6px 8px;
+  color: #9aa3ae;
+  background: #1b1f25;
+  border-color: #333b45;
+  border-radius: 7px;
+}
+
+.panel .build-problem-button:hover {
+  color: var(--desmos-blue);
+  background: #20262d;
+  border-color: #3f6f9f;
+}
+
+.panel .build-problem-icon {
+  width: 20px;
+  height: 20px;
+  color: var(--desmos-blue);
+  font-size: 14px;
+  background: var(--desmos-blue-soft);
+  border-color: rgba(99, 169, 232, 0.24);
+  border-radius: 5px;
+}
+
+.panel .build-problem-button strong {
+  color: #c6ced7;
+  font-size: 9px;
+  font-weight: 600;
+}
+
+.panel .build-problem-button:hover strong {
+  color: var(--desmos-blue);
+}
+
+.panel .build-problem-button small {
+  color: #7d8691;
+  font-size: 7.5px;
+}
+
+.panel .build-problem-arrow {
+  color: var(--desmos-faint);
+  font-size: 10px;
+}
+
+.panel .volume-card {
+  margin: 8px 12px 0;
+  padding: 10px 11px 8px;
+  background: var(--desmos-card);
+  border-color: var(--desmos-line);
+  border-radius: 7px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.02);
+}
+
+.panel .volume-card::after {
+  left: 12px;
+  width: 36px;
+  background: linear-gradient(90deg, var(--desmos-blue), transparent);
+}
+
+.panel .eyebrow {
+  color: #7f8893;
+  font-size: 7px;
+  letter-spacing: 0.12em;
+}
+
+.panel .method-badge {
+  color: var(--desmos-blue);
+  background: var(--desmos-blue-soft);
+  border-color: rgba(99, 169, 232, 0.24);
+  border-radius: 4px;
+}
+
+.panel .volume-figure {
+  gap: 10px;
+  margin-top: 7px;
+}
+
+.panel .fraction {
+  min-width: 54px;
+  color: var(--desmos-text);
+}
+
+.panel .fraction span {
+  font-size: 23px;
+  font-weight: 500;
+}
+
+.panel .fraction span:last-child {
+  font-size: 17px;
+}
+
+.panel .fraction i {
+  margin: 4px 0 3px;
+  background: linear-gradient(90deg, transparent, #4a525c 12%, #4a525c 88%, transparent);
+}
+
+.panel .volume-decimal {
+  color: #c8d0d9;
+}
+
+.panel .approx-mark {
+  color: var(--desmos-blue);
+}
+
+.panel .volume-decimal > span:nth-child(2) {
+  font-size: 14px;
+}
+
+.panel .volume-decimal small {
+  color: #7f8893;
+}
+
+.panel .volume-caption {
+  margin-top: 7px;
+  padding-top: 6px;
+  color: var(--desmos-muted);
+  font-size: 8.5px;
+  border-top-color: #272d35;
+}
+
+.panel .volume-card.is-numeric .volume-decimal > span:nth-child(2) {
+  font-size: 26px;
+}
+
+.panel .volume-card.is-numeric .approx-mark {
+  font-size: 14px;
+}
+
+.panel .math-section {
+  padding-top: 10px;
+}
+
+.panel .method-mini {
+  color: var(--desmos-muted);
+  background: var(--desmos-card-raised);
+  border-color: #303841;
+  border-radius: 4px;
+}
+
+.panel .radius-row {
+  margin-bottom: 6px;
+  padding: 6px 8px;
+  background: #181c21;
+  border-color: #272e36;
+  border-radius: 6px;
+}
+
+.panel .radius-row > span {
+  color: #6f7984;
+  font-size: 6.5px;
+}
+
+.panel .radius-row code {
+  color: var(--desmos-blue);
+  font-size: 9px;
+}
+
+.panel .equation-block {
+  padding: 8px 9px;
+  background: #181c21;
+  border-color: #272e36;
+  border-left: 3px solid var(--desmos-blue);
+  border-radius: 6px;
+}
+
+.panel .equation-main {
+  color: #d6dde5;
+  font-size: 9.5px;
+  line-height: 1.55;
+}
+
+.panel .equation-sub {
+  margin-top: 2px;
+  color: #808a95;
+  font-size: 8.5px;
+  line-height: 1.5;
+}
+
+.panel .equation-result {
+  margin-top: 5px;
+  padding-top: 5px;
+  color: var(--desmos-blue);
+  font-size: 10px;
+  border-top-color: #2d343d;
+}
+
+.panel .case-note {
+  margin-top: 7px;
+  color: var(--desmos-muted);
+  font-size: 9px;
+  line-height: 1.5;
+}
+
+.panel .approximation-section {
+  padding-top: 10px;
+}
+
+.panel .switch-track {
+  width: 28px;
+  height: 16px;
+  background: #2a3139;
+  border-color: #3a424c;
+}
+
+.panel .switch-track i {
+  top: 2px;
+  left: 2px;
+  width: 10px;
+  height: 10px;
+  background: #c3cbd4;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.28);
+}
+
+.panel .switch input:checked + .switch-track {
+  background: var(--desmos-blue);
+  border-color: var(--desmos-blue);
+}
+
+.panel .switch input:checked + .switch-track i {
+  background: #fff;
+  transform: translateX(12px);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+}
+
+.panel .approx-formula {
+  padding: 6px 8px;
+  color: #b7c0ca;
+  background: #181c21;
+  border-color: #272e36;
+  border-radius: 6px;
+  font-size: 9px;
+}
+
+.panel .approx-stats {
+  margin-top: 7px;
+}
+
+.panel .approx-stats span {
+  color: #6f7984;
+}
+
+.panel .approx-stats strong {
+  color: #d6dde5;
+  font-size: 10px;
+}
+
+.panel .approx-stats div:last-child strong {
+  color: var(--desmos-blue);
+}
+
+.panel .n-range {
+  margin-top: 4px;
+}
+
+.panel .n-range::-webkit-slider-runnable-track {
+  background: linear-gradient(
+    90deg,
+    var(--desmos-blue) 0 var(--n-pct, 25%),
+    #333b44 var(--n-pct, 25%) 100%
+  );
+}
+
+.panel .n-range::-moz-range-progress {
+  background: var(--desmos-blue);
+}
+
+.panel .n-range::-webkit-slider-thumb {
+  background: #e7ebef;
+  border: 2px solid var(--desmos-blue);
+}
+
+.panel .n-range::-moz-range-thumb {
+  background: #e7ebef;
+  border: 2px solid var(--desmos-blue);
+}
+
+.panel .error-row {
+  margin-top: 4px;
+}
+
+.panel .error-row > span {
+  color: #7f8893;
+}
+
+.panel .error-track {
+  background: #2a3139;
+}
+
+.panel .error-track i {
+  background: linear-gradient(90deg, #5fb878, var(--desmos-blue));
+}
+
+.panel .approx-note {
+  margin-top: 6px;
+  color: #7f8893;
+  font-size: 8.5px;
+  line-height: 1.4;
+}
+
+.panel button:focus-visible,
+.panel input:focus-visible {
+  outline-color: var(--desmos-blue);
+}
+
+/* -------------------------------------------------------------------------- */
 /* Load motion and responsive                                                */
 /* -------------------------------------------------------------------------- */
 
@@ -2851,7 +3358,7 @@ kbd {
 
 @media (max-width: 1360px) {
   .workspace {
-    grid-template-columns: 330px 46px minmax(0, 1fr);
+    grid-template-columns: 288px 46px minmax(0, 1fr);
   }
 
   .brand-project {
@@ -2879,7 +3386,7 @@ kbd {
   }
 
   .workspace {
-    grid-template-columns: 316px 44px minmax(0, 1fr);
+    grid-template-columns: 278px 44px minmax(0, 1fr);
   }
 
   .timeline-dock {
@@ -2914,7 +3421,7 @@ kbd {
     left: 0;
     right: auto;
     bottom: 26px;
-    width: min(355px, 92vw);
+    width: min(330px, 92vw);
     border-right-color: #3a424c;
     box-shadow: 28px 0 80px rgba(0, 0, 0, 0.48);
     transform: translateX(-103%);
@@ -3015,7 +3522,7 @@ kbd {
   }
 
   .viewport-toolbar {
-    top: 13px;
+    top: 54px;
     right: 12px;
   }
 

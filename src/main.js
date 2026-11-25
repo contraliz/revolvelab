@@ -131,54 +131,80 @@ scene.add(topLight);
 const floorGroup = new THREE.Group();
 scene.add(floorGroup);
 
-const gridMaterial = new THREE.ShaderMaterial({
-  transparent: true,
-  depthWrite: false,
-  side: THREE.DoubleSide,
-  toneMapped: false,
-  uniforms: {
-    uFadeCenter: { value: new THREE.Vector2(2, 0) },
-  },
-  vertexShader: /* glsl */ `
-    varying vec3 vWorld;
-    void main() {
-      vec4 world = modelMatrix * vec4(position, 1.0);
-      vWorld = world.xyz;
-      gl_Position = projectionMatrix * viewMatrix * world;
-    }
-  `,
-  fragmentShader: /* glsl */ `
-    uniform vec2 uFadeCenter;
-    varying vec3 vWorld;
+function makeGridMaterial(plane, opacity) {
+  return new THREE.ShaderMaterial({
+    transparent: true,
+    depthWrite: false,
+    side: THREE.FrontSide,
+    toneMapped: false,
+    uniforms: {
+      uFadeCenter: { value: new THREE.Vector2(2, 0) },
+      uPlane: { value: plane },
+      uOpacity: { value: opacity },
+    },
+    vertexShader: /* glsl */ `
+      varying vec3 vWorld;
+      void main() {
+        vec4 world = modelMatrix * vec4(position, 1.0);
+        vWorld = world.xyz;
+        gl_Position = projectionMatrix * viewMatrix * world;
+      }
+    `,
+    fragmentShader: /* glsl */ `
+      uniform vec2 uFadeCenter;
+      uniform float uOpacity;
+      uniform int uPlane;
+      varying vec3 vWorld;
 
-    float gridMask(vec2 p, float scale) {
-      vec2 c = p / scale;
-      vec2 grid = abs(fract(c - 0.5) - 0.5) / max(fwidth(c), vec2(0.00001));
-      float line = min(grid.x, grid.y);
-      return 1.0 - smoothstep(0.0, 1.15, line);
-    }
+      float gridMask(vec2 p, float scale) {
+        vec2 c = p / scale;
+        vec2 grid = abs(fract(c - 0.5) - 0.5) / max(fwidth(c), vec2(0.00001));
+        float line = min(grid.x, grid.y);
+        return 1.0 - smoothstep(0.0, 1.15, line);
+      }
 
-    void main() {
-      vec2 p = vWorld.xz;
-      float minor = gridMask(p, 1.0);
-      float major = gridMask(p, 5.0);
-      float distanceFade = 1.0 - smoothstep(11.0, 31.0, length(p - uFadeCenter));
+      void main() {
+        vec2 p;
+        if (uPlane == 0) {
+          p = vWorld.xz;
+        } else if (uPlane == 1) {
+          p = vWorld.xy;
+        } else {
+          p = vWorld.zy;
+        }
 
-      vec3 minorColor = vec3(0.205, 0.238, 0.274);
-      vec3 majorColor = vec3(0.325, 0.365, 0.414);
-      vec3 color = mix(minorColor, majorColor, major);
-      float alpha = (minor * 0.28 + major * 0.38) * distanceFade;
+        float minor = gridMask(p, 1.0);
+        float major = gridMask(p, 5.0);
+        float distanceFade = 1.0 - smoothstep(11.0, 31.0, length(p - uFadeCenter));
 
-      if (alpha < 0.004) discard;
-      gl_FragColor = vec4(color, alpha);
-    }
-  `,
-});
+        vec3 minorColor = vec3(0.205, 0.238, 0.274);
+        vec3 majorColor = vec3(0.325, 0.365, 0.414);
+        vec3 color = mix(minorColor, majorColor, major);
+        float alpha = (minor * 0.28 + major * 0.38) * distanceFade * uOpacity;
 
+        if (alpha < 0.004) discard;
+        gl_FragColor = vec4(color, alpha);
+      }
+    `,
+  });
+}
+
+const gridMaterial = makeGridMaterial(0, 1.0);
 const grid = new THREE.Mesh(new THREE.PlaneGeometry(80, 80), gridMaterial);
 grid.rotation.x = -Math.PI / 2;
 grid.renderOrder = -3;
 floorGroup.add(grid);
+
+const backGridMaterial = makeGridMaterial(1, 0.62);
+const backGrid = new THREE.Mesh(new THREE.PlaneGeometry(80, 80), backGridMaterial);
+backGrid.renderOrder = -3;
+floorGroup.add(backGrid);
+
+const sideGridMaterial = makeGridMaterial(2, 0.52);
+const sideGrid = new THREE.Mesh(new THREE.PlaneGeometry(80, 80), sideGridMaterial);
+sideGrid.rotation.y = Math.PI / 2;
+sideGrid.renderOrder = -3;
+floorGroup.add(sideGrid);
 
 function makeShadowTexture() {
   const size = 128;
@@ -309,15 +335,18 @@ function makeCoordinateBadge(letter, color) {
   const ctx = canvas.getContext("2d");
   ctx.clearRect(0, 0, 128, 128);
   ctx.beginPath();
-  ctx.arc(64, 64, 38, 0, Math.PI * 2);
+  if (typeof ctx.roundRect === "function") {
+    ctx.roundRect(28, 28, 72, 72, 12);
+  } else {
+    ctx.rect(28, 28, 72, 72);
+  }
   ctx.fillStyle = "rgba(12, 15, 19, 0.8)";
   ctx.fill();
   ctx.lineWidth = 3;
   ctx.strokeStyle = color;
   ctx.stroke();
   ctx.fillStyle = color;
-  ctx.font =
-    '600 52px "SFMono-Regular", Menlo, Consolas, monospace';
+  ctx.font = '600 52px "MesloLGS Nerd Font", monospace';
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
   ctx.fillText(letter, 64, 68);
@@ -362,9 +391,78 @@ coordinateAxesGroup.add(
   coordZBadge,
 );
 
+function makeCoordinateTicks(color) {
+  return new THREE.LineSegments(
+    new THREE.BufferGeometry(),
+    new THREE.LineBasicMaterial({
+      color,
+      transparent: true,
+      opacity: 0.38,
+      depthTest: false,
+      depthWrite: false,
+      toneMapped: false,
+    }),
+  );
+}
+
+const coordXTicks = makeCoordinateTicks(coordinatePalette.x);
+const coordYTicks = makeCoordinateTicks(coordinatePalette.y);
+const coordZTicks = makeCoordinateTicks(coordinatePalette.z);
+coordinateAxesGroup.add(coordXTicks, coordYTicks, coordZTicks);
+
 function setCoordinateLine(line, points) {
   line.geometry.dispose();
   line.geometry = new THREE.BufferGeometry().setFromPoints(points);
+}
+
+function setTickGeometry(lines, points) {
+  lines.geometry.dispose();
+  lines.geometry = new THREE.BufferGeometry().setFromPoints(points);
+}
+
+function tickStepFor(start, end) {
+  const span = end - start;
+  if (span > 24) return 5;
+  if (span > 12) return 2;
+  return 1;
+}
+
+function updateCoordinateTicks(anchorX, xStart, xEnd, yStart, yEnd, zStart, zEnd) {
+  const span = Math.max(xEnd - xStart, yEnd - yStart, zEnd - zStart);
+  const baseTick = clamp(span * 0.012, 0.045, 0.11);
+
+  const xPoints = [];
+  const xStep = tickStepFor(xStart, xEnd);
+  for (let x = Math.ceil(xStart / xStep) * xStep; x <= xEnd + 1e-6; x += xStep) {
+    const length = Math.abs(x / 5 - Math.round(x / 5)) < 1e-6 ? baseTick * 1.9 : baseTick;
+    xPoints.push(
+      new THREE.Vector3(x, 0, -length),
+      new THREE.Vector3(x, 0, length),
+    );
+  }
+  setTickGeometry(coordXTicks, xPoints);
+
+  const yPoints = [];
+  const yStep = tickStepFor(yStart, yEnd);
+  for (let y = Math.ceil(yStart / yStep) * yStep; y <= yEnd + 1e-6; y += yStep) {
+    const length = Math.abs(y / 5 - Math.round(y / 5)) < 1e-6 ? baseTick * 1.9 : baseTick;
+    yPoints.push(
+      new THREE.Vector3(anchorX - length, y, 0),
+      new THREE.Vector3(anchorX + length, y, 0),
+    );
+  }
+  setTickGeometry(coordYTicks, yPoints);
+
+  const zPoints = [];
+  const zStep = tickStepFor(zStart, zEnd);
+  for (let z = Math.ceil(zStart / zStep) * zStep; z <= zEnd + 1e-6; z += zStep) {
+    const length = Math.abs(z / 5 - Math.round(z / 5)) < 1e-6 ? baseTick * 1.9 : baseTick;
+    zPoints.push(
+      new THREE.Vector3(anchorX - length, 0, z),
+      new THREE.Vector3(anchorX + length, 0, z),
+    );
+  }
+  setTickGeometry(coordZTicks, zPoints);
 }
 
 function updateCoordinateAxes(problem) {
@@ -393,6 +491,16 @@ function updateCoordinateAxes(problem) {
     new THREE.Vector3(anchorX, 0, zStart),
     new THREE.Vector3(anchorX, 0, zEnd),
   ]);
+
+  updateCoordinateTicks(
+    anchorX,
+    xStart,
+    xEnd,
+    yStart,
+    yEnd,
+    zStart,
+    zEnd,
+  );
 
   const arrowScale = clamp(Math.max(xHigh - xLow, maxRadius) * 0.045, 0.65, 1.8);
   for (const arrow of [coordXArrow, coordYArrow, coordZArrow]) {
@@ -426,16 +534,28 @@ function updateAxisVisual(axisValue, x0, x1) {
 
 function placeStudio(problem) {
   const { x0 = 0, x1 = 4 } = problem.domain || {};
-  const xMid = (x0 + x1) / 2;
-  const span = Math.max(x1 - x0, 0.5);
+  const xLow = Math.min(x0, x1);
+  const xHigh = Math.max(x0, x1);
+  const xMid = (xLow + xHigh) / 2;
+  const span = Math.max(xHigh - xLow, 0.5);
   const floorY = problem.axisValue - problem.maxRadius - 1.28;
-  floorGroup.position.y = floorY;
-  grid.position.set(0, 0, 0);
+  const ceilingY = problem.axisValue + problem.maxRadius + 1.1;
+  const wallCenterY = (floorY + ceilingY) / 2;
+  const backWallZ = -problem.maxRadius - 1.35;
+  const sideWallX = xLow - 1.05;
+
+  grid.position.set(0, floorY, 0);
   gridMaterial.uniforms.uFadeCenter.value.set(xMid, 0);
+
+  backGrid.position.set(xMid, wallCenterY, backWallZ);
+  backGridMaterial.uniforms.uFadeCenter.value.set(xMid, wallCenterY);
+
+  sideGrid.position.set(sideWallX, wallCenterY, 0);
+  sideGridMaterial.uniforms.uFadeCenter.value.set(0, wallCenterY);
 
   const shadowWidth = span * 1.3 + problem.maxRadius * 1.35 + 1.2;
   const shadowDepth = problem.maxRadius * 2.35 + 1.2;
-  shadowMesh.position.set(xMid, 0.012, 0);
+  shadowMesh.position.set(xMid, floorY + 0.012, 0);
   shadowMesh.scale.set(shadowWidth, shadowDepth, 1);
 
   updateAxisVisual(problem.axisValue, x0, x1);
@@ -741,9 +861,6 @@ function makeCaseButton(variant) {
 function renderCaseList() {
   const list = $("#caseList");
   list.replaceChildren(...currentProblem.variants.map(makeCaseButton));
-  $("#caseCount").textContent = currentProblem.variants
-    .map((_, index) => index + 1)
-    .join(" / ");
 }
 
 function renderProblemMenu() {
@@ -768,13 +885,8 @@ function renderProblemMenu() {
 function updateProblemChrome() {
   $("#brandProject").textContent =
     currentProblem.id === "custom" ? currentProblem.title : "Parabolic cap";
-  $("#studyKicker").textContent = currentProblem.kicker;
   $("#regionEquation").textContent = currentProblem.region.equation;
   $("#regionDomain").textContent = currentProblem.region.domainLabel;
-  $("#panelFooterEquation").textContent =
-    currentProblem.id === "custom"
-      ? "custom region · numerical volume"
-      : "y = −x² + 4x";
   $("#buildProblemBtn").classList.toggle(
     "is-custom-active",
     currentProblem.id === "custom",

@@ -14,6 +14,7 @@ Open the local URL printed by Vite.
 **Requirements**
 
 - Node.js 20+
+- No font install is needed: the UI bundles MesloLGS Nerd Font in `public/fonts`.
 - For AI question parsing: a running local OpenCode service with the
   `opencode-go` provider authenticated. Manual equation entry works without it.
 
@@ -135,7 +136,7 @@ V_C=\pi\int_0^4\left[25-\left(5-(-x^2+4x)\right)^2\right]dx
 - **Profile / Full solid** snaps back to the source region or the completed solid.
 - **Viewport presets** repeat the `Profile` and `360°` actions in the top-right viewport toolbar.
 - **Generating region graph** shows a color-coded 2D graph of \(f(x)\), \(g(x)\), and the rotation line.
-- **Coordinate axes** \(x\), \(y\), and \(z\) are drawn in the viewport alongside the orange rotation axis.
+- **3D coordinate frame** draws \(x\), \(y\), and \(z\) axes with tick marks, plus floor and vertical grid planes alongside the orange rotation axis.
 - Keyboard: `1` `2` `3` switch axes, `Space` play/pause, `4` cutaway, `F` frame, `G` grid, `W` wireframe, `X` X-ray, `N` new problem.
 
 ## Geometry notes
@@ -148,3 +149,10 @@ same pipeline.
 
 The interface is an original Blender-inspired layout built with Three.js. It is
 not affiliated with Blender.
+
+## Credits
+
+The interface uses **MesloLGS Nerd Font** for every label, equation, and control.
+The font is bundled in `public/fonts` under the Apache License 2.0, with Nerd
+Fonts patches under the MIT and SIL OFL 1.1 licenses. See
+`public/fonts/MesloLGSNerdFont-LICENSE.txt`.

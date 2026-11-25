@@ -9,6 +9,13 @@
     />
     <title>Revolve Lab — Solids of Revolution</title>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link
+      rel="preload"
+      href="/fonts/MesloLGSNerdFont-Regular.woff2"
+      as="font"
+      type="font/woff2"
+      crossorigin
+    />
     <link rel="stylesheet" href="/src/style.css" />
   </head>
   <body>
@@ -320,10 +327,7 @@
 
         <aside class="panel" id="propertiesPanel">
           <div class="panel-hero">
-            <div class="panel-kicker"><span id="studyKicker">VOLUME STUDY 01</span><span class="kicker-index">01</span></div>
-            <h1>Solids of<br /><em>revolution</em></h1>
             <div class="region-card">
-              <span class="region-tag">REGION</span>
               <div class="region-equation" id="regionEquation">y = −x² + 4x</div>
               <div class="region-domain" id="regionDomain">0 ≤ x ≤ 4 <span>·</span> 0 ≤ y ≤ f(x)</div>
             </div>
@@ -331,10 +335,9 @@
 
           <div class="panel-scroll">
             <section class="panel-section cases-section">
-              <div class="section-heading"><span><b>01</b> Select a revolution</span><small id="caseCount">1 / 2 / 3</small></div>
               <div class="case-list" id="caseList"></div>
               <button class="build-problem-button" id="buildProblemBtn">
-                <span class="build-problem-icon">＋</span>
+                <span class="build-problem-icon">+</span>
                 <span><strong>Ask a new question</strong><small>AI-assisted custom solid</small></span>
                 <span class="build-problem-arrow">↗</span>
               </button>
@@ -409,25 +412,6 @@
                 <p class="approx-note" id="approxNote">Enable to inspect the washer stack. This snaps the study to a full revolution.</p>
               </div>
             </section>
-
-            <section class="panel-section quick-view-section">
-              <div class="section-heading"><span>Inspect</span><small>4 / 5 / 6</small></div>
-              <div class="view-actions">
-                <button data-angle="0"><span class="view-icon">◒</span><span>Profile</span></button>
-                <button data-angle="270"><span class="view-icon">◔</span><span>Cutaway</span></button>
-                <button data-angle="360"><span class="view-icon">●</span><span>Full solid</span></button>
-              </div>
-              <div class="inspect-note">
-                <span class="inspect-line"></span>
-                Scrub the timeline to watch the region sweep around the axis.
-              </div>
-            </section>
-
-            <footer class="panel-footer">
-              <span id="panelFooterEquation">y = −x² + 4x</span>
-              <span class="footer-dot"></span>
-              <span>Three.js · PBR</span>
-            </footer>
           </div>
         </aside>
       </div>

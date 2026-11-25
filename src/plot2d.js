@@ -27,6 +27,9 @@ export class RegionPlot {
     this.width = 1;
     this.height = 1;
     this.dpr = 1;
+    this.dprCap = 1.25;
+    this.slowDraws = 0;
+    this.lastDrawMs = 0;
     this.view = { xMin: -6, xMax: 6, yMin: -4, yMax: 4 };
     this.viewInitialized = false;
     this.userAdjusted = false;
@@ -75,7 +78,7 @@ export class RegionPlot {
     const rect = this.canvas.getBoundingClientRect();
     const width = Math.max(1, Math.floor(rect.width));
     const height = Math.max(1, Math.floor(rect.height));
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const dpr = Math.min(window.devicePixelRatio || 1, this.dprCap);
     if (width === this.width && height === this.height && dpr === this.dpr) {
       this.requestRender();
       return;
@@ -186,6 +189,7 @@ export class RegionPlot {
   draw() {
     const context = this.context;
     if (!context) return;
+    const started = performance.now();
     const width = this.width;
     const height = this.height;
     context.clearRect(0, 0, width, height);
@@ -197,6 +201,19 @@ export class RegionPlot {
     this.drawCurves(context);
     this.drawAxisLine(context);
     this.drawCornerReadout(context);
+
+    this.lastDrawMs = performance.now() - started;
+    if (this.lastDrawMs > 16 && this.dprCap > 1) {
+      this.slowDraws += 1;
+      if (this.slowDraws >= 3) {
+        this.dprCap = 1;
+        this.slowDraws = 0;
+        this.dpr = 0;
+        this.resize();
+      }
+    } else if (this.lastDrawMs < 9) {
+      this.slowDraws = 0;
+    }
   }
 
   drawGrid(context) {
@@ -291,7 +308,7 @@ export class RegionPlot {
     for (const cell of this.model.cells) {
       const samples = Math.max(
         40,
-        Math.min(420, Math.ceil(this.toScreenX(cell.b) - this.toScreenX(cell.a))),
+        Math.min(320, Math.ceil(this.toScreenX(cell.b) - this.toScreenX(cell.a))),
       );
       const upper = [];
       const lower = [];
@@ -346,16 +363,13 @@ export class RegionPlot {
         context.strokeStyle = color;
         context.lineWidth = 2.15;
         context.lineJoin = "round";
-        context.shadowColor = hexToRgba(color, 0.35);
-        context.shadowBlur = 8;
         context.moveTo(px, 0);
         context.lineTo(px, this.height);
         context.stroke();
-        context.shadowBlur = 0;
         continue;
       }
       const points = [];
-      const stride = 1.4;
+      const stride = 2.2;
       let previousY = null;
       context.beginPath();
       let drawing = false;
@@ -394,10 +408,7 @@ export class RegionPlot {
       context.lineWidth = 2.15;
       context.lineJoin = "round";
       context.lineCap = "round";
-      context.shadowColor = hexToRgba(color, 0.35);
-      context.shadowBlur = 8;
       context.stroke();
-      context.shadowBlur = 0;
 
       const last = [...points].reverse().find(
         ([px, py]) => px > 14 && px < this.width - 10 && py > 10 && py < this.height - 10,

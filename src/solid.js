@@ -6,9 +6,9 @@ import {
 } from "./region.js";
 
 const TAU = Math.PI * 2;
-const SEG_PHI = 192;
-const SEG_U_BASE = 148;
-const CAP_SEGMENTS = 192;
+const SEG_PHI = 144;
+const SEG_U_BASE = 96;
+const CAP_SEGMENTS = 144;
 const CONTOUR_MERIDIANS = 12;
 const CONTOUR_RINGS = 9;
 const CONTOUR_SEGMENTS = 96;
@@ -30,8 +30,8 @@ function basisForAxis(axis) {
 function segmentsForRange(range) {
   const span = Math.max(range.max - range.min, 1e-8);
   return Math.max(
-    48,
-    Math.min(230, Math.round(SEG_U_BASE + Math.abs(span) * 2)),
+    44,
+    Math.min(180, Math.round(SEG_U_BASE + Math.abs(span) * 1.5)),
   );
 }
 
@@ -308,6 +308,7 @@ function buildContours(radialFn, range, startAngle, createLine) {
             new THREE.BufferGeometry().setFromPoints(innerPoints),
             "meridian",
             relative,
+            true,
           ),
         );
       }
@@ -346,6 +347,7 @@ function buildContours(radialFn, range, startAngle, createLine) {
         new THREE.BufferGeometry().setFromPoints(innerPoints),
         "ring",
         0,
+        true,
       );
       innerLine.userData.segments = CONTOUR_SEGMENTS;
       lines.push(innerLine);
@@ -355,34 +357,95 @@ function buildContours(radialFn, range, startAngle, createLine) {
   return lines;
 }
 
+function mergeCellsForMesh(cells) {
+  const sorted = [...cells].sort((a, b) => a.a - b.a);
+  const groups = [];
+
+  for (const cell of sorted) {
+    const key = [cell.lowerLine.id, cell.upperLine.id].sort().join("|");
+    const previous = groups.at(-1);
+    if (
+      previous &&
+      previous.key === key &&
+      Math.abs(previous.b - cell.a) < 1e-5
+    ) {
+      previous.b = cell.b;
+      previous.cells.push(cell);
+    } else {
+      groups.push({
+        key,
+        a: cell.a,
+        b: cell.b,
+        cells: [cell],
+        lines: [cell.lowerLine, cell.upperLine],
+      });
+    }
+  }
+
+  return groups.map((group) => {
+    if (group.cells.length === 1) return group.cells[0];
+    const [first, second] = group.lines;
+    const evaluate = (line, x) => {
+      try {
+        return line.evaluate(x);
+      } catch {
+        return Number.NaN;
+      }
+    };
+    const lower = (x) => {
+      const a = evaluate(first, x);
+      const b = evaluate(second, x);
+      if (Number.isFinite(a) && Number.isFinite(b)) return Math.min(a, b);
+      return Number.NaN;
+    };
+    const upper = (x) => {
+      const a = evaluate(first, x);
+      const b = evaluate(second, x);
+      if (Number.isFinite(a) && Number.isFinite(b)) return Math.max(a, b);
+      return Number.NaN;
+    };
+    const middle = (group.a + group.b) / 2;
+    const lowerIsFirst =
+      evaluate(first, middle) <= evaluate(second, middle);
+    return {
+      a: group.a,
+      b: group.b,
+      span: group.b - group.a,
+      lines: group.lines,
+      lower,
+      upper,
+      lowerLine: lowerIsFirst ? first : second,
+      upperLine: lowerIsFirst ? second : first,
+      polygon: null,
+      polygonLocal: null,
+      uRange: null,
+      area: group.cells.reduce((total, cell) => total + (cell.area || 0), 0),
+    };
+  });
+}
+
 export function createRevolvedSolid(model) {
   const group = new THREE.Group();
   group.name = "Solid of revolution";
   group.matrixAutoUpdate = false;
   group.matrix.copy(basisForAxis(model.axis));
 
-  const outerMaterial = new THREE.MeshPhysicalMaterial({
+  const outerMaterial = new THREE.MeshPhongMaterial({
     color: 0x0d8f83,
-    metalness: 0.14,
-    roughness: 0.3,
-    clearcoat: 0.42,
-    clearcoatRoughness: 0.22,
+    specular: 0x9fe8df,
+    shininess: 52,
     transparent: true,
     opacity: 0.98,
-    side: THREE.DoubleSide,
-    envMapIntensity: 0.58,
+    side: THREE.FrontSide,
   });
 
-  const innerMaterial = new THREE.MeshPhysicalMaterial({
+  const innerMaterial = new THREE.MeshPhongMaterial({
     color: 0x064747,
-    metalness: 0.18,
-    roughness: 0.4,
-    clearcoat: 0.18,
-    clearcoatRoughness: 0.3,
+    specular: 0x3b8f88,
+    shininess: 28,
     transparent: true,
     opacity: 0.98,
     side: THREE.DoubleSide,
-    envMapIntensity: 0.44,
   });
 
   const capMaterial = new THREE.MeshBasicMaterial({
@@ -429,10 +492,11 @@ export function createRevolvedSolid(model) {
       radialFn,
       range,
       startAngle,
-      (geometry, kind, relativeAngle) => {
+      (geometry, kind, relativeAngle, inner = false) => {
         const line = new THREE.Line(geometry, contourMaterial);
         line.userData.kind = kind;
         line.userData.relativeAngle = relativeAngle;
+        line.userData.inner = inner;
         line.userData.rep = rep;
         line.userData.hideWhenFull = hideWhenFull;
         line.renderOrder = 1;
@@ -446,7 +510,13 @@ export function createRevolvedSolid(model) {
   }
 
   function addCap(u, radial, startAngle, outward, rep, hideWhenFull) {
-    if (!radial || radial.outer < 1e-5) return;
+    if (
+      !radial ||
+      radial.outer < 1e-5 ||
+      radial.outer - radial.inner < 1e-5
+    ) {
+      return;
+    }
     const geometry = buildCapGeometry(
       u,
       radial.inner,
@@ -551,7 +621,7 @@ export function createRevolvedSolid(model) {
     addContours(radialFn, range, startAngle, rep, hideWhenFull);
   }
 
-  for (const cell of model.cells) {
+  for (const cell of mergeCellsForMesh(model.cells)) {
     const fullRange = cellURangeFor(cell, model.axis);
     const positiveRange = radialRangeForSide(cell, model.axis, 1, fullRange);
     const negativeRange = radialRangeForSide(cell, model.axis, -1, fullRange);
@@ -571,22 +641,42 @@ export function createRevolvedSolid(model) {
       );
     }
 
-    if (positiveRange) {
+    if (crossing) {
+      if (positiveRange) {
+        addTube(
+          (u) => sideRadialAt(cell, model.axis, u, 1),
+          positiveRange,
+          0,
+          "side",
+          true,
+        );
+      }
+      if (negativeRange) {
+        addTube(
+          (u) => sideRadialAt(cell, model.axis, u, -1),
+          negativeRange,
+          Math.PI,
+          "side",
+          true,
+        );
+      }
+    } else if (positiveRange) {
+      // A one-sided cell exists across its entire u-range. Using the exact
+      // cell endpoints keeps zero-thickness seams and pointed tips closed.
       addTube(
         (u) => sideRadialAt(cell, model.axis, u, 1),
-        positiveRange,
+        fullRange,
         0,
         "side",
-        crossing,
+        false,
       );
-    }
-    if (negativeRange) {
+    } else if (negativeRange) {
       addTube(
         (u) => sideRadialAt(cell, model.axis, u, -1),
-        negativeRange,
+        fullRange,
         Math.PI,
         "side",
-        crossing,
+        false,
       );
     }
   }
@@ -651,7 +741,7 @@ export function createRevolvedSolid(model) {
       const hiddenByRepresentation =
         (line.userData.rep === "union" && !full) ||
         (line.userData.hideWhenFull && full);
-      if (hiddenByRepresentation) {
+      if (hiddenByRepresentation || (line.userData.inner && currentMode === "solid")) {
         line.visible = false;
         continue;
       }

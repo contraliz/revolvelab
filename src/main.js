@@ -1,6 +1,5 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
-import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
 import {
   analyzeLines,
   formatBound,
@@ -32,6 +31,8 @@ const viewport = $("#viewport");
 const canvas = $("#sceneCanvas");
 const plotCanvas = $("#plotCanvas");
 const plot = new RegionPlot(plotCanvas);
+const maxRenderScale = Math.min(window.devicePixelRatio || 1, 1.25);
+let renderScale = maxRenderScale;
 
 const state = {
   lines: [
@@ -47,6 +48,7 @@ const state = {
   mode: "solid",
   grid: true,
   playing: false,
+  interacting: false,
   sweep: 360,
   stale: true,
   cameraTween: null,
@@ -73,7 +75,7 @@ const renderer = new THREE.WebGLRenderer({
   preserveDrawingBuffer: false,
   powerPreference: "high-performance",
 });
-renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+renderer.setPixelRatio(renderScale);
 renderer.setClearColor(0x000000, 0);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -97,14 +99,6 @@ controls.minPolarAngle = 0.08;
 controls.maxPolarAngle = Math.PI * 0.93;
 controls.target.set(0, 1.5, 0);
 
-const pmrem = new THREE.PMREMGenerator(renderer);
-const room = new RoomEnvironment();
-const environmentTexture = pmrem.fromScene(room, 0.03).texture;
-scene.environment = environmentTexture;
-scene.environmentIntensity = 0.36;
-room.dispose?.();
-pmrem.dispose();
-
 const hemi = new THREE.HemisphereLight(0xc8e2ff, 0x1b1512, 0.52);
 scene.add(hemi);
 
@@ -119,10 +113,6 @@ scene.add(fillLight);
 const rimLight = new THREE.DirectionalLight(0xff7c38, 1.55);
 rimLight.position.set(1.5, -4.5, -6);
 scene.add(rimLight);
-
-const topLight = new THREE.DirectionalLight(0xffffff, 0.25);
-topLight.position.set(0, 12, 0);
-scene.add(topLight);
 
 /* -------------------------------------------------------------------------- */
 /* One origin-centred xz grid plane                                           */
@@ -390,14 +380,36 @@ function updateCameraTween(now) {
   return true;
 }
 
+function setRenderScale(scale) {
+  const next = clamp(scale, 0.75, maxRenderScale);
+  if (Math.abs(next - renderScale) < 0.01) return;
+  renderScale = next;
+  const width = Math.max(viewport.clientWidth, 1);
+  const height = Math.max(viewport.clientHeight, 1);
+  renderer.setPixelRatio(renderScale);
+  renderer.setSize(width, height, false);
+  requestRender();
+}
+
 function updateFps(now) {
   if (now - state.fpsWindowStart < 650) return;
   const seconds = (now - state.fpsWindowStart) / 1000;
   const readout = $("#fpsReadout");
+  const fps = state.fpsFrames / seconds;
   if (state.fpsFrames === 0) {
     readout.textContent = "IDLE";
   } else {
-    readout.textContent = `${Math.round(state.fpsFrames / seconds)} FPS`;
+    readout.textContent = `${Math.round(fps)} FPS`;
+  }
+  const active = state.interacting || state.playing || Boolean(state.cameraTween);
+  if (active && fps > 0) {
+    if (fps < 50 && renderScale > 1.0) {
+      setRenderScale(Math.max(1.0, renderScale - 0.15));
+    } else if (fps < 38 && renderScale > 0.85) {
+      setRenderScale(0.85);
+    } else if (fps < 30 && renderScale > 0.75) {
+      setRenderScale(0.75);
+    }
   }
   state.fpsFrames = 0;
   state.fpsWindowStart = now;
@@ -1299,7 +1311,7 @@ window.addEventListener("keydown", (event) => {
 function resize() {
   const width = Math.max(viewport.clientWidth, 1);
   const height = Math.max(viewport.clientHeight, 1);
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  renderer.setPixelRatio(renderScale);
   renderer.setSize(width, height, false);
   camera.aspect = width / height;
   camera.updateProjectionMatrix();
@@ -1312,8 +1324,12 @@ resizeObserver.observe(viewport);
 window.addEventListener("resize", resize);
 
 controls.addEventListener("start", () => {
+  state.interacting = true;
   cancelCameraTween();
   state.playAfterCamera = false;
+});
+controls.addEventListener("end", () => {
+  state.interacting = false;
 });
 controls.addEventListener("change", () => {
   requestRender();

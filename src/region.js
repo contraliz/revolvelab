@@ -1,5 +1,6 @@
 import {
   approximateFraction,
+  compileConstant,
   compileExpression,
   containsRestriction,
   formatNumber,
@@ -115,9 +116,40 @@ function compileLine(input, index) {
   const raw = String(input.text ?? "").trim();
   if (!raw) return null;
 
+  const verticalMatch = raw.match(/^\s*x\s*=\s*(.+)$/i);
+  if (verticalMatch) {
+    let value;
+    try {
+      value = compileConstant(verticalMatch[1]).value;
+    } catch (error) {
+      throw new RegionError(`Vertical line: ${error.message}`, input.id);
+    }
+    if (!Number.isFinite(value)) {
+      throw new RegionError("A vertical line needs a finite x-value.", input.id);
+    }
+    return {
+      id: input.id,
+      index,
+      raw,
+      color: input.color,
+      kind: "vertical",
+      implicit: Boolean(input.implicit),
+      role: input.role ?? null,
+      verticalX: value,
+      source: `x = ${formatNumber(value, 6).replace("-", "−")}`,
+      core: null,
+      restrictions: [],
+      evaluate: () => Number.NaN,
+      polynomial: false,
+      squarePolynomial: false,
+      hasRestriction: false,
+      domainRuns: [],
+    };
+  }
+
   const stripped = stripFunctionPrefix(raw);
   if (!stripped) {
-    throw new RegionError("Enter a function after y =.", input.id);
+    throw new RegionError("Enter a function or a vertical line x = c.", input.id);
   }
 
   const { core, restrictions } = splitTrailingRestrictions(stripped);
@@ -172,6 +204,9 @@ function compileLine(input, index) {
     index,
     raw,
     color: input.color,
+    kind: "function",
+    implicit: Boolean(input.implicit),
+    role: input.role ?? null,
     source,
     core: coreExpression,
     restrictions: restrictionExpressions,
@@ -444,7 +479,7 @@ function cellArea(cell) {
   return total;
 }
 
-function pairEndpointClosed(cell, endpoint, side) {
+function pairEndpointClosed(cell, endpoint, side, verticalXs = []) {
   const exactLower = safeEvaluate(cell.lowerLine, endpoint);
   const exactUpper = safeEvaluate(cell.upperLine, endpoint);
   if (Number.isFinite(exactLower) && Number.isFinite(exactUpper)) {
@@ -465,6 +500,9 @@ function pairEndpointClosed(cell, endpoint, side) {
   }
 
   const eventTolerance = Math.max(1e-7, cell.span * 1e-6);
+  if (verticalXs.some((value) => near(endpoint, value, eventTolerance))) {
+    return true;
+  }
   for (const line of [cell.lowerLine, cell.upperLine]) {
     for (const run of line.domainRuns) {
       if (
@@ -488,7 +526,7 @@ function pairEndpointClosed(cell, endpoint, side) {
   return false;
 }
 
-function pairCellSegments(first, second, window) {
+function pairCellSegments(first, second, window, verticalXs = []) {
   const events = [];
   for (const line of [first, second]) {
     for (const run of line.domainRuns) {
@@ -497,6 +535,9 @@ function pairCellSegments(first, second, window) {
     }
   }
   events.push(...findIntersections(first, second, window));
+  events.push(
+    ...verticalXs.filter((value) => value > window.min && value < window.max),
+  );
 
   const unique = dedupeEvents(
     events.filter((value) => value > window.min && value < window.max),
@@ -529,13 +570,21 @@ function pairCellSegments(first, second, window) {
   return mergeSegments(segments, Math.max(1e-6, window.span * 1e-7));
 }
 
-function buildPairCells(lines, window) {
+function buildPairCells(lines, window, verticalXs = [], options = {}) {
   const cells = [];
 
   for (let first = 0; first < lines.length; first++) {
     for (let second = first + 1; second < lines.length; second++) {
-      const segments = pairCellSegments(lines[first], lines[second], window);
+      const segments = pairCellSegments(
+        lines[first],
+        lines[second],
+        window,
+        verticalXs,
+      );
       for (const segment of segments) {
+        if (options.clipXMin !== null && options.clipXMin !== undefined) {
+          segment.a = Math.max(segment.a, options.clipXMin);
+        }
         if (segment.b - segment.a < 1e-7) continue;
         const cell = {
           ...segment,
@@ -547,8 +596,8 @@ function buildPairCells(lines, window) {
           uRange: null,
         };
         if (
-          !pairEndpointClosed(cell, cell.a, "left") ||
-          !pairEndpointClosed(cell, cell.b, "right")
+          !pairEndpointClosed(cell, cell.a, "left", verticalXs) ||
+          !pairEndpointClosed(cell, cell.b, "right", verticalXs)
         ) {
           continue;
         }
@@ -869,6 +918,46 @@ export function cellRadialIntervalAt(cell, axis, u) {
   };
 }
 
+export function cellSideRadialIntervalAt(cell, axis, u, sign) {
+  if (axis.isHorizontal) {
+    const x = u;
+    const k = axis.point.y;
+    const lower = cell.lower(x) - k;
+    const upper = cell.upper(x) - k;
+    if (!Number.isFinite(lower) || !Number.isFinite(upper)) return null;
+    let inner;
+    let outer;
+    if (sign > 0) {
+      if (upper <= 1e-9) return null;
+      inner = Math.max(0, lower);
+      outer = upper;
+    } else {
+      if (lower >= -1e-9) return null;
+      inner = Math.max(0, -upper);
+      outer = -lower;
+    }
+    if (outer - inner < 1e-9) return null;
+    return { inner, outer };
+  }
+
+  const localIntervals = cellLocalIntervalsAtU(cell, axis, u);
+  const radial = [];
+  for (const [a, b] of localIntervals) {
+    if (sign > 0) {
+      const lo = Math.max(0, a);
+      const hi = Math.max(0, b);
+      if (hi - lo > 1e-9) radial.push([lo, hi]);
+    } else {
+      const lo = Math.max(0, -b);
+      const hi = Math.max(0, -a);
+      if (hi - lo > 1e-9) radial.push([lo, hi]);
+    }
+  }
+  const union = intervalUnion(radial);
+  if (union.length === 0) return null;
+  return { inner: union[0][0], outer: union.at(-1)[1] };
+}
+
 export function cellPolygonLocal(cell, axis) {
   return polygonLocal(cell, axis);
 }
@@ -1019,6 +1108,7 @@ function buildFormula(cells, axis, method, volume, exact) {
     if (horizontal) {
       const kValue = axis.point.y;
       const k = formatNumber(kValue, 6).replace("-", "−");
+      const zeroAxis = Math.abs(kValue) < 1e-9;
       if (side === "above") {
         outerText = radialDisplay(upperText, kValue, "above");
         innerText = radialDisplay(lowerText, kValue, "above");
@@ -1073,7 +1163,7 @@ function buildFormula(cells, axis, method, volume, exact) {
 /* Public analysis                                                            */
 /* -------------------------------------------------------------------------- */
 
-export function analyzeLines(inputs, axisText) {
+export function analyzeLines(inputs, axisText, options = {}) {
   const usable = (inputs || []).filter((input) => String(input.text ?? "").trim());
   if (usable.length < 2) {
     return {
@@ -1097,10 +1187,16 @@ export function analyzeLines(inputs, axisText) {
     };
   }
 
-  if (lines.length < 2) {
+  const functionLines = lines.filter((line) => line.kind !== "vertical");
+  const verticalXs = lines
+    .filter((line) => line.kind === "vertical")
+    .map((line) => line.verticalX);
+
+  if (functionLines.length < 2) {
     return {
       ok: false,
-      error: "Add at least two function lines to enclose a region.",
+      error:
+        "Add at least two y = f(x) lines. Vertical lines such as x = 4 can close the sides, but two curves are needed for area.",
       lines,
     };
   }
@@ -1118,11 +1214,11 @@ export function analyzeLines(inputs, axisText) {
   }
 
   const window = searchWindowFor(usable, lines);
-  for (const line of lines) scanDomain(line, window);
+  for (const line of functionLines) scanDomain(line, window);
 
   let parsedCells;
   try {
-    parsedCells = buildPairCells(lines, window);
+    parsedCells = buildPairCells(functionLines, window, verticalXs, options);
   } catch (error) {
     return {
       ok: false,
@@ -1184,11 +1280,28 @@ export function analyzeLines(inputs, axisText) {
   }
 
   let exact = null;
-  const exactCandidates = lines.every((line) => {
+  const exactCandidates = functionLines.every((line) => {
     if (line.polynomial) return true;
     return axis.isHorizontal && Math.abs(axis.point.y) < 1e-9 && line.squarePolynomial;
   });
-  if (axis.isHorizontal && exactCandidates && cells.every((cell) => cell.polygon && cell.polygon.length > 4)) {
+  const rationalEndpoint = (value) =>
+    Boolean(
+      approximateFraction(value, {
+        maxDenominator: 2000,
+        tolerance: 1e-8,
+      }),
+    );
+  if (
+    axis.isHorizontal &&
+    exactCandidates &&
+    cells.every(
+      (cell) =>
+        cell.polygon &&
+        cell.polygon.length > 4 &&
+        rationalEndpoint(cell.a) &&
+        rationalEndpoint(cell.b),
+    )
+  ) {
     const fraction = approximateFraction(volume / Math.PI, {
       maxDenominator: 5000,
       tolerance: 1e-6,
@@ -1230,6 +1343,13 @@ export function analyzeLines(inputs, axisText) {
     const second = axis.pointAt(window.span, 0);
     yMin = Math.min(yMin, first.y, second.y);
     yMax = Math.max(yMax, first.y, second.y);
+  }
+
+  for (const value of verticalXs) {
+    if (value >= xMin - (xMax - xMin) * 0.25 && value <= xMax + (xMax - xMin) * 0.25) {
+      xMin = Math.min(xMin, value);
+      xMax = Math.max(xMax, value);
+    }
   }
 
   const xPadding = Math.max((xMax - xMin) * 0.08, 0.25);

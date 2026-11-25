@@ -254,13 +254,6 @@ axisLabels.x.position.set(AXIS_EXTENT * 0.74, 0.5, 0);
 axisLabels.y.position.set(0.5, AXIS_EXTENT * 0.74, 0);
 axisLabels.z.position.set(0, 0.5, AXIS_EXTENT * 0.74);
 
-const originDot = new THREE.Mesh(
-  new THREE.SphereGeometry(0.055, 12, 12),
-  new THREE.MeshBasicMaterial({ color: 0xe8edf2, toneMapped: false }),
-);
-originDot.renderOrder = 4;
-coordinateGroup.add(originDot);
-
 /* -------------------------------------------------------------------------- */
 /* Rotation axis visual                                                       */
 /* -------------------------------------------------------------------------- */
@@ -283,7 +276,7 @@ rotationAxis.renderOrder = 2;
 scene.add(rotationAxis);
 
 function updateRotationAxisVisual(model) {
-  if (!model?.axis) {
+  if (!model?.axis || !model.bounds) {
     rotationAxis.visible = false;
     return;
   }
@@ -491,6 +484,11 @@ function buildLineRows() {
   const list = $("#lineList");
   list.replaceChildren();
 
+  const empty = state.lines.length === 0;
+  $("#editorPanel").classList.toggle("is-empty", empty);
+  $("#lineEmpty").hidden = !empty;
+  if (empty) $("#autoBoundaryNote").hidden = true;
+
   state.lines.forEach((line, index) => {
     const row = document.createElement("div");
     row.className = "line-row";
@@ -503,10 +501,6 @@ function buildLineRows() {
     swatch.style.background = line.color;
     swatch.style.boxShadow = `0 0 0 3px ${hexToRgba(line.color, 0.09)}`;
 
-    const prefix = document.createElement("span");
-    prefix.className = "line-prefix";
-    prefix.textContent = "y=";
-
     const input = document.createElement("input");
     input.className = "expression-input line-input";
     input.type = "text";
@@ -514,9 +508,13 @@ function buildLineRows() {
     input.spellcheck = false;
     input.autocomplete = "off";
     input.autocapitalize = "off";
-    input.setAttribute("aria-label", `Function line ${index + 1}`);
+    input.setAttribute("aria-label", `Line ${index + 1}`);
     input.placeholder =
-      index === 0 ? "-x^2 + 4x" : index === 1 ? "0" : "sin(x) {0 <= x <= pi}";
+      index === 0
+        ? "y = -x^2 + 4x"
+        : index === 1
+          ? "y = 0   or   x = 4"
+          : "y = sin(x)   or   x = 4";
     input.addEventListener("input", (event) => {
       updateLineText(line.id, event.target.value);
     });
@@ -532,12 +530,10 @@ function buildLineRows() {
     remove.className = "line-remove";
     remove.textContent = "×";
     remove.title = "Remove line";
-    remove.setAttribute("aria-label", `Remove function line ${index + 1}`);
-    remove.disabled = state.lines.length <= 1;
-    if (remove.disabled) remove.style.opacity = "0.12";
+    remove.setAttribute("aria-label", `Remove line ${index + 1}`);
     remove.addEventListener("click", () => removeLine(line.id));
 
-    row.append(swatch, prefix, input, remove);
+    row.append(swatch, input, remove);
 
     const error = document.createElement("div");
     error.className = "line-error";
@@ -586,7 +582,6 @@ function addLine() {
 }
 
 function removeLine(id) {
-  if (state.lines.length <= 1) return;
   state.lines = state.lines.filter((line) => line.id !== id);
   buildLineRows();
   switchToGraphIfNeeded();
@@ -630,9 +625,47 @@ function scheduleAnalyze() {
   state.analyzeTimer = window.setTimeout(() => analyzeNow({ fit: true }), 90);
 }
 
+function effectiveInputs() {
+  const visible = state.lines.filter((line) => String(line.text ?? "").trim());
+  if (visible.length !== 1) return state.lines;
+  return [
+    ...state.lines,
+    {
+      id: "__auto-x-axis",
+      text: "y = 0",
+      color: "#7f8a95",
+      implicit: true,
+      role: "x-axis",
+    },
+    {
+      id: "__auto-y-axis",
+      text: "x = 0",
+      color: "#7f8a95",
+      implicit: true,
+      role: "y-axis",
+    },
+  ];
+}
+
 function analyzeNow(options = {}) {
   const { fit = false } = options;
-  const model = analyzeLines(state.lines, state.axisText);
+  const empty = state.lines.length === 0;
+  const visible = state.lines.filter((line) => String(line.text ?? "").trim());
+  $("#autoBoundaryNote").hidden = visible.length !== 1;
+
+  let model;
+  if (empty) {
+    model = {
+      ok: false,
+      error: "Add a line to begin.",
+      lines: [],
+      axis: null,
+    };
+  } else {
+    model = analyzeLines(effectiveInputs(), state.axisText, {
+      clipXMin: visible.length === 1 ? 0 : null,
+    });
+  }
   state.model = model;
   state.lineErrorId = model.lineId || null;
 
@@ -656,9 +689,15 @@ function analyzeNow(options = {}) {
   if (!model.ok) {
     $("#graphEmpty").innerHTML = "";
     const title = document.createElement("strong");
-    title.textContent = "Check the expressions";
     const detail = document.createElement("span");
-    detail.textContent = model.error || "Add a region to continue.";
+    if (empty) {
+      title.textContent = "Start with a line";
+      detail.textContent = "Use Add line to enter y = f(x) or x = c.";
+      $("#statusMessage").textContent = "2D graph · add a line to begin";
+    } else {
+      title.textContent = "Check the expressions";
+      detail.textContent = model.error || "Add a region to continue.";
+    }
     $("#graphEmpty").append(title, detail);
   }
 
@@ -690,6 +729,7 @@ function updateChrome() {
       : "Local math · 2D graph";
   $("#axisChipLabel").textContent = axisLabel;
   $("#graphAxisChip").textContent = `ROTATION · ${axisLabel}`;
+  $("#graphAxisChip").hidden = !model?.axis;
 
   if (model?.ok) {
     const firstCell = model.cells[0];
@@ -1082,6 +1122,11 @@ function countTriangles() {
   let total = 0;
   state.solid.group.traverse((object) => {
     if (!object.isMesh) return;
+    let parent = object;
+    while (parent) {
+      if (parent.visible === false) return;
+      parent = parent.parent;
+    }
     const geometry = object.geometry;
     if (!geometry) return;
     const count = geometry.index

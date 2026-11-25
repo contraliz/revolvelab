@@ -30,8 +30,13 @@ npm run preview
 
 - Starts on a full-size 2D graph with a compact expression sidebar.
 - Accepts any number of `y = f(x)` lines, each with its own color.
+- Accepts vertical boundary lines such as `x = 4`; a bare expression is treated
+  as `y = ...`.
+- Can be emptied completely. With zero lines, the editor shows only **Add line**.
+- With a single line, the x-axis and y-axis close the region in the first
+  quadrant, so `y = 4 - x^2` immediately gives the quarter-cap region.
 - Finds the enclosed region or regions where pairs of curves meet or are cut by
-  a domain restriction.
+  a domain restriction or a vertical boundary.
 - Supports horizontal, vertical, and slanted rotation lines:
   `y = 0`, `y = -1`, `y = 2x + 1`, `x = 3`.
 - Shows the exact volume when the result is a rational multiple of π, and a
@@ -45,8 +50,21 @@ npm run preview
 
 ## Desmos-compatible input
 
-Function lines are entered as the right-hand side of `y = f(x)`. A leading
-`y =` or `f(x) =` is also accepted.
+Enter either a full equation or just the right-hand side:
+
+```text
+y = -x^2 + 4x
+-x^2 + 4x
+x = 4
+```
+
+A leading `y =` or `f(x) =` is optional. A line beginning with `x =` is a
+vertical boundary that can close the left or right side of the region.
+
+If only one line is present, the editor assumes the remaining boundaries are the
+coordinate axes: the x-axis becomes the horizontal boundary and the y-axis
+clips the region to the first quadrant. `y = 4 - x^2` then encloses
+`0 <= x <= 2, 0 <= y <= 4 - x^2`.
 
 ### Expressions
 
@@ -136,8 +154,9 @@ can all produce exact results. Other shapes use adaptive Simpson integration
 **numerical volume**.
 
 The region finder looks for intervals where a pair of curves is closed at both
-ends — either because the curves meet or because a domain restriction ends.
-Nested regions are removed so overlapping pairs are not double-counted.
+ends — either because the curves meet, a domain restriction ends, or a vertical
+boundary line crosses. Nested regions are removed so overlapping pairs are not
+double-counted.
 
 ## 3D view
 
@@ -145,7 +164,9 @@ Nested regions are removed so overlapping pairs are not double-counted.
 - `x`, `y`, and `z` axes pass through `(0, 0, 0)`.
 - The orange dashed line is the actual rotation line.
 - The source region is shown as a cut face at profile angle 0°.
-- Shading modes: solid, X-ray, and wireframe.
+- Shading modes: solid, X-ray, and a sparse meridian/ring wireframe.
+- The wireframe is a contour network, not the full triangle mesh, so it stays
+  legible on high-resolution solids.
 - Timeline: profile, cutaway, full solid, and scrubbable angle.
 
 ## Controls
@@ -161,8 +182,9 @@ Nested regions are removed so overlapping pairs are not double-counted.
 - WebGL renders only when the camera, solid, animation, or graph changes.
 - `OrbitControls.enableDamping` is off, so a released drag stops immediately.
 - Pixel ratio is capped at 2.
-- The solid builder omits the inner surface when the shape is a disk, and clamps
-  zero-radius tips to clean points instead of tiny caps.
+- The solid builder omits the inner surface when the shape is a disk, and refines
+  each profile to its true zero-radius end so pointed tips close cleanly instead
+  of being sliced into a small cap.
 - The continuous animation loop stops as soon as playback and camera tweening
   finish.
 

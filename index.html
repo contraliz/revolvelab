@@ -79,10 +79,13 @@
           <div class="editor-scroll">
             <section class="expression-section">
               <div class="section-heading">
-                <span>FUNCTIONS</span>
-                <span class="section-hint">y = f(x) · any number</span>
+                <span>LINES</span>
+                <span class="section-hint">y = f(x) or x = c</span>
               </div>
               <div class="line-list" id="lineList"></div>
+              <div class="line-empty" id="lineEmpty" hidden>
+                No lines yet. Add a line to start.
+              </div>
               <button class="add-line-button" id="addLineBtn" type="button">
                 <span class="add-line-plus">+</span>
                 <span>Add line</span>
@@ -106,6 +109,9 @@
                   autocapitalize="off"
                   aria-label="Line of rotation"
                 />
+              </div>
+              <div class="auto-boundary-note" id="autoBoundaryNote" hidden>
+                One line — the x-axis and y-axis close the region.
               </div>
               <div class="axis-examples">
                 <span>Try</span>
@@ -177,6 +183,7 @@
                 <code>sin(x)</code>, <code>pi</code>, <code>e</code>,
                 <code>{0 &lt;= x &lt;= 2}</code>, <code>{x &lt; 0 or x &gt; 2}</code>.
                 Piecewise: <code>{x &lt; 0: -x, x^2}</code>.
+                Vertical boundaries: <code>x = 4</code>.
               </p>
               <p class="syntax-foot">Everything is evaluated and integrated locally.</p>
             </section>

@@ -1,7 +1,7 @@
 import * as THREE from "three";
 import {
-  cellPolygonLocal,
   cellRadialIntervalAt,
+  cellSideRadialIntervalAt,
   cellURangeFor,
 } from "./region.js";
 
@@ -9,6 +9,10 @@ const TAU = Math.PI * 2;
 const SEG_PHI = 192;
 const SEG_U_BASE = 148;
 const CAP_SEGMENTS = 192;
+const CONTOUR_MERIDIANS = 12;
+const CONTOUR_RINGS = 9;
+const CONTOUR_SEGMENTS = 96;
+const EPS = 1e-6;
 
 function basisForAxis(axis) {
   const direction = new THREE.Vector3(
@@ -23,19 +27,25 @@ function basisForAxis(axis) {
   return matrix;
 }
 
+function segmentsForRange(range) {
+  const span = Math.max(range.max - range.min, 1e-8);
+  return Math.max(
+    48,
+    Math.min(230, Math.round(SEG_U_BASE + Math.abs(span) * 2)),
+  );
+}
+
 function radialAt(cell, axis, u) {
   return cellRadialIntervalAt(cell, axis, u);
 }
 
-function buildSurfaceGeometry(cell, axis, which) {
-  const range = cellURangeFor(cell, axis);
+function sideRadialAt(cell, axis, u, sign) {
+  return cellSideRadialIntervalAt(cell, axis, u, sign);
+}
+
+function buildSurfaceGeometry(radialFn, range, startAngle, which) {
   const span = Math.max(range.max - range.min, 1e-8);
-  const segmentsU = Math.max(
-    48,
-    Math.min(230, Math.round(SEG_U_BASE + Math.abs(span) * 2)),
-  );
-  const startAngle =
-    which === "outer" || which === "inner" ? cell.startAngle : 0;
+  const segmentsU = segmentsForRange(range);
   const positions = [];
   const indices = [];
   let previous = null;
@@ -46,7 +56,7 @@ function buildSurfaceGeometry(cell, axis, which) {
     const sin = Math.sin(phi);
     for (let i = 0; i <= segmentsU; i++) {
       const u = range.min + (span * i) / segmentsU;
-      let radial = radialAt(cell, axis, u);
+      let radial = radialFn(u);
       if (!radial) {
         radial =
           i === 0 || i === segmentsU
@@ -88,7 +98,7 @@ function buildSurfaceGeometry(cell, axis, which) {
   return geometry;
 }
 
-function buildCapGeometry(cell, axis, u, inner, outer, startAngle, outward) {
+function buildCapGeometry(u, inner, outer, startAngle, outward) {
   const positions = [];
   const normals = [];
   const indices = [];
@@ -150,9 +160,8 @@ function buildCapGeometry(cell, axis, u, inner, outer, startAngle, outward) {
   return geometry;
 }
 
-function buildCutGeometry(cell, axis) {
-  const polygon = cellPolygonLocal(cell, axis);
-  if (polygon.length < 3) return null;
+function buildPolygonGeometry(polygon) {
+  if (!polygon || polygon.length < 3) return null;
   const shape = new THREE.Shape();
   shape.moveTo(polygon[0].u, polygon[0].v);
   for (let index = 1; index < polygon.length; index++) {
@@ -164,31 +173,186 @@ function buildCutGeometry(cell, axis) {
   return geometry;
 }
 
-function buildOutlineGeometry(cell, axis) {
-  const polygon = cellPolygonLocal(cell, axis);
-  if (polygon.length < 2) return null;
-  const points = polygon.map(
-    (point) => new THREE.Vector3(point.u, point.v, 0.002),
+function buildOutlineGeometry(polygon) {
+  if (!polygon || polygon.length < 2) return null;
+  return new THREE.BufferGeometry().setFromPoints(
+    polygon.map((point) => new THREE.Vector3(point.u, point.v, 0.002)),
   );
-  return new THREE.BufferGeometry().setFromPoints(points);
 }
 
-function determineStartAngle(cell, axis) {
-  const range = cellURangeFor(cell, axis);
-  const u = (range.min + range.max) / 2;
-  const interval = radialAt(cell, axis, u);
-  if (!interval) return 0;
-  const polygon = cellPolygonLocal(cell, axis);
-  let min = Infinity;
-  let max = -Infinity;
-  for (const point of polygon) {
-    min = Math.min(min, point.v);
-    max = Math.max(max, point.v);
+function radialRangeForSide(cell, axis, sign, fullRange) {
+  const samples = 80;
+  const step = (fullRange.max - fullRange.min) / samples;
+  const present = new Array(samples + 1).fill(false);
+  for (let index = 0; index <= samples; index++) {
+    const u = fullRange.min + step * index;
+    present[index] = Boolean(sideRadialAt(cell, axis, u, sign));
   }
-  const offset = 1e-7;
-  if (max < -offset) return Math.PI;
-  if (min > offset) return 0;
-  return 0;
+  const first = present.indexOf(true);
+  if (first < 0) return null;
+  let last = samples;
+  while (last > 0 && !present[last]) last -= 1;
+  if (last <= first) return null;
+
+  let min = fullRange.min + step * first;
+  if (first > 0) {
+    let outside = min - step;
+    let inside = min;
+    for (let iteration = 0; iteration < 48; iteration++) {
+      const middle = (outside + inside) / 2;
+      if (sideRadialAt(cell, axis, middle, sign)) {
+        inside = middle;
+      } else {
+        outside = middle;
+      }
+    }
+    min = inside;
+  }
+
+  let max = fullRange.min + step * last;
+  if (last < samples) {
+    let inside = max;
+    let outside = max + step;
+    for (let iteration = 0; iteration < 48; iteration++) {
+      const middle = (inside + outside) / 2;
+      if (sideRadialAt(cell, axis, middle, sign)) {
+        inside = middle;
+      } else {
+        outside = middle;
+      }
+    }
+    max = inside;
+  }
+
+  if (max - min < 1e-7) return null;
+  return { min, max };
+}
+
+function maxInnerForSide(radialFn, range) {
+  let maxInner = 0;
+  for (let sample = 1; sample < 16; sample++) {
+    const u = range.min + ((range.max - range.min) * sample) / 16;
+    const radial = radialFn(u);
+    if (radial) maxInner = Math.max(maxInner, radial.inner);
+  }
+  return maxInner;
+}
+
+function buildSidePolygon(radialFn, range, sign) {
+  const samples = 140;
+  const outer = [];
+  const inner = [];
+  let previous = null;
+
+  for (let index = 0; index <= samples; index++) {
+    const u = range.min + ((range.max - range.min) * index) / samples;
+    let radial = radialFn(u);
+    if (!radial) {
+      radial =
+        index === 0 || index === samples
+          ? { inner: 0, outer: 0 }
+          : previous || { inner: 0, outer: 0 };
+    }
+    previous = radial;
+    const outerRadius = radial.outer < 1e-5 ? 0 : radial.outer;
+    const innerRadius = radial.inner < 1e-5 ? 0 : radial.inner;
+    outer.push({ u, v: sign * outerRadius });
+    inner.push({ u, v: sign * innerRadius });
+  }
+
+  return [...outer, ...inner.reverse()];
+}
+
+function buildContours(radialFn, range, startAngle, createLine) {
+  const lines = [];
+  const span = Math.max(range.max - range.min, 1e-8);
+  let hasInner = false;
+  for (let sample = 1; sample < 12; sample++) {
+    const u = range.min + (span * sample) / 12;
+    const radial = radialFn(u);
+    if (radial && radial.inner > 1e-5) {
+      hasInner = true;
+      break;
+    }
+  }
+
+  for (let index = 0; index < CONTOUR_MERIDIANS; index++) {
+    const relative = (index / CONTOUR_MERIDIANS) * TAU;
+    const phi = startAngle + relative;
+    const cos = Math.cos(phi);
+    const sin = Math.sin(phi);
+    const outerPoints = [];
+    const innerPoints = [];
+    for (let step = 0; step <= 72; step++) {
+      const u = range.min + (span * step) / 72;
+      const radial = radialFn(u);
+      if (!radial) continue;
+      const outer = radial.outer < 1e-5 ? 0 : radial.outer;
+      const inner = radial.inner < 1e-5 ? 0 : radial.inner;
+      outerPoints.push(new THREE.Vector3(u, outer * cos, outer * sin));
+      if (hasInner) {
+        innerPoints.push(new THREE.Vector3(u, inner * cos, inner * sin));
+      }
+    }
+    if (outerPoints.length > 1) {
+      lines.push(
+        createLine(
+          new THREE.BufferGeometry().setFromPoints(outerPoints),
+          "meridian",
+          relative,
+        ),
+      );
+      if (hasInner) {
+        lines.push(
+          createLine(
+            new THREE.BufferGeometry().setFromPoints(innerPoints),
+            "meridian",
+            relative,
+          ),
+        );
+      }
+    }
+  }
+
+  for (let index = 0; index < CONTOUR_RINGS; index++) {
+    const u =
+      range.min + (0.055 + (index / (CONTOUR_RINGS - 1)) * 0.89) * span;
+    const radial = radialFn(u);
+    if (!radial || radial.outer < 1e-5) continue;
+    const outerPoints = [];
+    const innerPoints = [];
+    for (let step = 0; step <= CONTOUR_SEGMENTS; step++) {
+      const phi = startAngle + (step / CONTOUR_SEGMENTS) * TAU;
+      const cos = Math.cos(phi);
+      const sin = Math.sin(phi);
+      outerPoints.push(
+        new THREE.Vector3(u, radial.outer * cos, radial.outer * sin),
+      );
+      if (hasInner && radial.inner > 1e-5) {
+        innerPoints.push(
+          new THREE.Vector3(u, radial.inner * cos, radial.inner * sin),
+        );
+      }
+    }
+    const outerLine = createLine(
+      new THREE.BufferGeometry().setFromPoints(outerPoints),
+      "ring",
+      0,
+    );
+    outerLine.userData.segments = CONTOUR_SEGMENTS;
+    lines.push(outerLine);
+    if (innerPoints.length > 1) {
+      const innerLine = createLine(
+        new THREE.BufferGeometry().setFromPoints(innerPoints),
+        "ring",
+        0,
+      );
+      innerLine.userData.segments = CONTOUR_SEGMENTS;
+      lines.push(innerLine);
+    }
+  }
+
+  return lines;
 }
 
 export function createRevolvedSolid(model) {
@@ -246,112 +410,262 @@ export function createRevolvedSolid(model) {
     depthWrite: false,
   });
 
+  const contourMaterial = new THREE.LineBasicMaterial({
+    color: 0x8cebdc,
+    transparent: true,
+    opacity: 0.16,
+    depthWrite: false,
+  });
+
   const surfaces = [];
   const caps = [];
   const cutFaces = [];
   const outlines = [];
+  const contours = [];
   let maxInner = 0;
 
-  for (const cell of model.cells) {
-    const range = cellURangeFor(cell, model.axis);
-    const startAngle = determineStartAngle(cell, model.axis);
-    cell.startAngle = startAngle;
-
-    let cellMaxInner = 0;
-    for (let sample = 1; sample < 12; sample++) {
-      const u = range.min + ((range.max - range.min) * sample) / 12;
-      const radial = radialAt(cell, model.axis, u);
-      if (radial) cellMaxInner = Math.max(cellMaxInner, radial.inner);
+  function addContours(radialFn, range, startAngle, rep, hideWhenFull) {
+    const created = buildContours(
+      radialFn,
+      range,
+      startAngle,
+      (geometry, kind, relativeAngle) => {
+        const line = new THREE.Line(geometry, contourMaterial);
+        line.userData.kind = kind;
+        line.userData.relativeAngle = relativeAngle;
+        line.userData.rep = rep;
+        line.userData.hideWhenFull = hideWhenFull;
+        line.renderOrder = 1;
+        group.add(line);
+        return line;
+      },
+    );
+    for (const line of created) {
+      contours.push(line);
     }
-    maxInner = Math.max(maxInner, cellMaxInner);
+  }
 
-    const outerGeometry = buildSurfaceGeometry(cell, model.axis, "outer");
+  function addCap(u, radial, startAngle, outward, rep, hideWhenFull) {
+    if (!radial || radial.outer < 1e-5) return;
+    const geometry = buildCapGeometry(
+      u,
+      radial.inner,
+      radial.outer,
+      startAngle,
+      outward,
+    );
+    const mesh = new THREE.Mesh(geometry, capMaterial);
+    mesh.renderOrder = 1;
+    group.add(mesh);
+    caps.push({ mesh, geometry, rep, hideWhenFull });
+  }
+
+  function addTube(radialFn, range, startAngle, rep, hideWhenFull, options = {}) {
+    const { cuts = true, caps: includeCaps = true } = options;
+    const outerGeometry = buildSurfaceGeometry(
+      radialFn,
+      range,
+      startAngle,
+      "outer",
+    );
     const outer = new THREE.Mesh(outerGeometry, outerMaterial);
     outer.renderOrder = 1;
     group.add(outer);
     surfaces.push({
       mesh: outer,
       geometry: outerGeometry,
-      which: "outer",
       segmentsU: outerGeometry.userData.segmentsU,
+      rep,
+      hideWhenFull,
     });
 
-    if (cellMaxInner > 1e-5) {
-      const innerGeometry = buildSurfaceGeometry(cell, model.axis, "inner");
+    const maxInnerSide = maxInnerForSide(radialFn, range);
+    maxInner = Math.max(maxInner, maxInnerSide);
+    if (maxInnerSide > 1e-5) {
+      const innerGeometry = buildSurfaceGeometry(
+        radialFn,
+        range,
+        startAngle,
+        "inner",
+      );
       const inner = new THREE.Mesh(innerGeometry, innerMaterial);
       inner.renderOrder = 1;
       group.add(inner);
       surfaces.push({
         mesh: inner,
         geometry: innerGeometry,
-        which: "inner",
         segmentsU: innerGeometry.userData.segmentsU,
+        rep,
+        hideWhenFull,
       });
     }
 
-    const endSamples = [
-      range.min,
-      range.max,
-    ];
-    for (const [index, u] of endSamples.entries()) {
-      const radial = radialAt(cell, model.axis, u);
-      if (!radial || radial.outer < 1e-5) continue;
-      const geometry = buildCapGeometry(
-        cell,
-        model.axis,
-        u,
-        radial.inner,
-        radial.outer,
+    if (includeCaps) {
+      addCap(
+        range.min,
+        radialFn(range.min),
         startAngle,
-        index === 0 ? -1 : 1,
+        -1,
+        rep,
+        hideWhenFull,
       );
-      const cap = new THREE.Mesh(geometry, capMaterial);
-      cap.renderOrder = 1;
-      group.add(cap);
-      caps.push({ mesh: cap, geometry });
+      addCap(
+        range.max,
+        radialFn(range.max),
+        startAngle,
+        1,
+        rep,
+        hideWhenFull,
+      );
     }
 
-    const cutGeometry = buildCutGeometry(cell, model.axis);
-    if (cutGeometry) {
-      const cutStart = new THREE.Mesh(cutGeometry, cutMaterial);
-      const cutEnd = new THREE.Mesh(cutGeometry, cutMaterial);
-      cutStart.renderOrder = 2;
-      cutEnd.renderOrder = 2;
-      group.add(cutStart, cutEnd);
-      cutFaces.push({ start: cutStart, end: cutEnd });
+    if (cuts) {
+      const polygon = buildSidePolygon(radialFn, range, startAngle === 0 ? 1 : -1);
+      const cutGeometry = buildPolygonGeometry(polygon);
+      if (cutGeometry) {
+        const cutStart = new THREE.Mesh(cutGeometry, cutMaterial);
+        const cutEnd = new THREE.Mesh(cutGeometry, cutMaterial);
+        cutStart.renderOrder = 2;
+        cutEnd.renderOrder = 2;
+        group.add(cutStart, cutEnd);
+        cutFaces.push({ start: cutStart, end: cutEnd, rep, hideWhenFull });
 
-      const outlineGeometry = buildOutlineGeometry(cell, model.axis);
-      if (outlineGeometry) {
-        const startOutline = new THREE.LineLoop(
-          outlineGeometry,
-          outlineMaterial,
-        );
-        const endOutline = new THREE.LineLoop(
-          outlineGeometry,
-          outlineMaterial.clone(),
-        );
-        startOutline.renderOrder = 3;
-        endOutline.renderOrder = 3;
-        group.add(startOutline, endOutline);
-        outlines.push({ start: startOutline, end: endOutline });
+        const outlineGeometry = buildOutlineGeometry(polygon);
+        if (outlineGeometry) {
+          const startOutline = new THREE.LineLoop(
+            outlineGeometry,
+            outlineMaterial,
+          );
+          const endOutline = new THREE.LineLoop(
+            outlineGeometry,
+            outlineMaterial.clone(),
+          );
+          startOutline.renderOrder = 3;
+          endOutline.renderOrder = 3;
+          group.add(startOutline, endOutline);
+          outlines.push({ start: startOutline, end: endOutline, rep, hideWhenFull });
+        }
       }
+    }
+
+    addContours(radialFn, range, startAngle, rep, hideWhenFull);
+  }
+
+  for (const cell of model.cells) {
+    const fullRange = cellURangeFor(cell, model.axis);
+    const positiveRange = radialRangeForSide(cell, model.axis, 1, fullRange);
+    const negativeRange = radialRangeForSide(cell, model.axis, -1, fullRange);
+    const crossing = Boolean(positiveRange && negativeRange);
+
+    if (crossing) {
+      // A full revolution of a region that crosses the axis is a single radial
+      // band. Keep that clean union for 360°, and signed half-shells for the
+      // cutaway so both sides of the source region line up with their cut faces.
+      addTube(
+        (u) => radialAt(cell, model.axis, u),
+        fullRange,
+        0,
+        "union",
+        false,
+        { cuts: false },
+      );
+    }
+
+    if (positiveRange) {
+      addTube(
+        (u) => sideRadialAt(cell, model.axis, u, 1),
+        positiveRange,
+        0,
+        "side",
+        crossing,
+      );
+    }
+    if (negativeRange) {
+      addTube(
+        (u) => sideRadialAt(cell, model.axis, u, -1),
+        negativeRange,
+        Math.PI,
+        "side",
+        crossing,
+      );
     }
   }
 
   let currentMode = "solid";
   let lastSweep = 0;
 
-  function syncCutVisibility() {
-    const partial = lastSweep < TAU - 0.002;
-    const beginning = lastSweep >= 0;
-    const visible = currentMode !== "wire";
-    for (const face of cutFaces) {
-      face.start.visible = partial && beginning && visible;
-      face.end.visible = partial && lastSweep > 0.004 && visible;
+  function syncVisibility() {
+    const full = lastSweep >= TAU - 0.002;
+    const wire = currentMode === "wire";
+    const usedSegments = Math.min(
+      SEG_PHI,
+      Math.ceil((lastSweep / TAU) * SEG_PHI),
+    );
+
+    for (const surface of surfaces) {
+      const hiddenByRepresentation =
+        (surface.rep === "union" && !full) ||
+        (surface.hideWhenFull && full);
+      if (wire || hiddenByRepresentation) {
+        surface.mesh.visible = false;
+        continue;
+      }
+      const count = usedSegments * surface.segmentsU * 6;
+      surface.geometry.setDrawRange(0, count);
+      surface.mesh.visible = count > 0;
     }
+
+    for (const cap of caps) {
+      const hiddenByRepresentation =
+        (cap.rep === "union" && !full) || (cap.hideWhenFull && full);
+      if (wire || hiddenByRepresentation) {
+        cap.mesh.visible = false;
+        continue;
+      }
+      const count =
+        usedSegments * (cap.geometry.userData.indicesPerSegment || 6);
+      cap.geometry.setDrawRange(0, count);
+      cap.mesh.visible = count > 0;
+    }
+
+    const partial = !full;
+    for (const face of cutFaces) {
+      const hiddenByRepresentation =
+        (face.rep === "union" && !full) || (face.hideWhenFull && full);
+      face.start.visible = partial && !hiddenByRepresentation && !wire;
+      face.end.visible =
+        partial && lastSweep > 0.004 && !hiddenByRepresentation && !wire;
+      face.end.rotation.x = lastSweep;
+    }
+
     for (const outline of outlines) {
-      outline.start.visible = partial && beginning;
-      outline.end.visible = partial && lastSweep > 0.004;
+      const hiddenByRepresentation =
+        (outline.rep === "union" && !full) || (outline.hideWhenFull && full);
+      outline.start.visible = partial && !hiddenByRepresentation;
+      outline.end.visible =
+        partial && lastSweep > 0.004 && !hiddenByRepresentation;
+      outline.end.rotation.x = lastSweep;
+    }
+
+    for (const line of contours) {
+      const hiddenByRepresentation =
+        (line.userData.rep === "union" && !full) ||
+        (line.userData.hideWhenFull && full);
+      if (hiddenByRepresentation) {
+        line.visible = false;
+        continue;
+      }
+      if (line.userData.kind === "ring") {
+        const segments = line.userData.segments || CONTOUR_SEGMENTS;
+        const count =
+          1 + Math.min(segments, Math.ceil((lastSweep / TAU) * segments));
+        line.geometry.setDrawRange(0, count);
+        line.visible = count > 1;
+      } else {
+        line.visible =
+          lastSweep > 0.002 &&
+          line.userData.relativeAngle <= lastSweep + 0.002;
+      }
     }
   }
 
@@ -361,60 +675,44 @@ export function createRevolvedSolid(model) {
     const xray = mode === "xray";
     const wire = mode === "wire";
 
-    outerMaterial.wireframe = wire;
-    innerMaterial.wireframe = wire;
+    outerMaterial.wireframe = false;
+    innerMaterial.wireframe = false;
+    capMaterial.wireframe = false;
     outerMaterial.transparent = mode !== "solid";
     innerMaterial.transparent = mode !== "solid";
     outerMaterial.depthWrite = mode === "solid";
     innerMaterial.depthWrite = mode === "solid";
-    outerMaterial.opacity = xray ? 0.16 : wire ? 0.14 : 0.98;
-    innerMaterial.opacity = xray ? 0.12 : wire ? 0.1 : 0.98;
+    outerMaterial.opacity = xray ? 0.16 : 0.98;
+    innerMaterial.opacity = xray ? 0.12 : 0.98;
     outerMaterial.needsUpdate = true;
     innerMaterial.needsUpdate = true;
 
     capMaterial.transparent = mode !== "solid";
     capMaterial.depthWrite = mode === "solid";
-    capMaterial.opacity = xray ? 0.14 : wire ? 0.04 : 0.98;
-    capMaterial.wireframe = wire;
+    capMaterial.opacity = xray ? 0.14 : 0.98;
     capMaterial.needsUpdate = true;
 
     cutMaterial.opacity = xray ? 0.42 : 0.82;
     cutMaterial.needsUpdate = true;
 
-    for (const cap of caps) cap.mesh.visible = !wire;
-    syncCutVisibility();
+    if (wire) {
+      contourMaterial.color.setHex(0x9af4e4);
+      contourMaterial.opacity = 0.52;
+    } else if (xray) {
+      contourMaterial.color.setHex(0xa4fff0);
+      contourMaterial.opacity = 0.28;
+    } else {
+      contourMaterial.color.setHex(0x8cebdc);
+      contourMaterial.opacity = 0.15;
+    }
+    contourMaterial.needsUpdate = true;
+
+    syncVisibility();
   }
 
   function updateSweep(sweepRadians) {
-    const sweep = THREE.MathUtils.clamp(sweepRadians, 0, TAU);
-    const fraction = sweep / TAU;
-    const usedSegments = Math.min(
-      SEG_PHI,
-      Math.ceil(fraction * SEG_PHI),
-    );
-
-    for (const surface of surfaces) {
-      const count = usedSegments * surface.segmentsU * 6;
-      surface.geometry.setDrawRange(0, count);
-      surface.mesh.visible = count > 0;
-    }
-
-    for (const cap of caps) {
-      const capCount =
-        usedSegments * (cap.geometry.userData.indicesPerSegment || 6);
-      cap.geometry.setDrawRange(0, capCount);
-      cap.mesh.visible = capCount > 0 && currentMode !== "wire";
-    }
-
-    for (const face of cutFaces) {
-      face.end.rotation.x = sweep;
-    }
-    for (const outline of outlines) {
-      outline.end.rotation.x = sweep;
-    }
-
-    lastSweep = sweep;
-    syncCutVisibility();
+    lastSweep = THREE.MathUtils.clamp(sweepRadians, 0, TAU);
+    syncVisibility();
   }
 
   applyMode("solid");
@@ -433,6 +731,7 @@ export function createRevolvedSolid(model) {
       capMaterial,
       cutMaterial,
       outlineMaterial,
+      contourMaterial,
     },
   };
 }

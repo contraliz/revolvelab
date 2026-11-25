@@ -337,7 +337,23 @@ export class RegionPlot {
     context.clip();
 
     for (const line of this.model.lines) {
+      if (line.implicit) continue;
       const color = line.color || "#ff9950";
+      if (line.kind === "vertical") {
+        const px = this.toScreenX(line.verticalX);
+        if (px < -2 || px > this.width + 2) continue;
+        context.beginPath();
+        context.strokeStyle = color;
+        context.lineWidth = 2.15;
+        context.lineJoin = "round";
+        context.shadowColor = hexToRgba(color, 0.35);
+        context.shadowBlur = 8;
+        context.moveTo(px, 0);
+        context.lineTo(px, this.height);
+        context.stroke();
+        context.shadowBlur = 0;
+        continue;
+      }
       const points = [];
       const stride = 1.4;
       let previousY = null;

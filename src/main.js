@@ -625,9 +625,15 @@ function scheduleAnalyze() {
   state.analyzeTimer = window.setTimeout(() => analyzeNow({ fit: true }), 90);
 }
 
+function countFunctionLines(lines = state.lines) {
+  return lines.filter((line) => {
+    const text = String(line.text ?? "").trim();
+    return text && !/^\s*x\s*=/i.test(text);
+  }).length;
+}
+
 function effectiveInputs() {
-  const visible = state.lines.filter((line) => String(line.text ?? "").trim());
-  if (visible.length !== 1) return state.lines;
+  if (countFunctionLines() !== 1) return state.lines;
   return [
     ...state.lines,
     {
@@ -650,8 +656,9 @@ function effectiveInputs() {
 function analyzeNow(options = {}) {
   const { fit = false } = options;
   const empty = state.lines.length === 0;
-  const visible = state.lines.filter((line) => String(line.text ?? "").trim());
-  $("#autoBoundaryNote").hidden = visible.length !== 1;
+  const functionCount = countFunctionLines();
+  const autoAxes = functionCount === 1;
+  $("#autoBoundaryNote").hidden = !autoAxes;
 
   let model;
   if (empty) {
@@ -663,8 +670,17 @@ function analyzeNow(options = {}) {
     };
   } else {
     model = analyzeLines(effectiveInputs(), state.axisText, {
-      clipXMin: visible.length === 1 ? 0 : null,
+      clipXMin: autoAxes ? 0 : null,
+      clipYMin: autoAxes ? 0 : null,
     });
+    if (
+      autoAxes &&
+      !model.ok &&
+      /No enclosed region/i.test(model.error)
+    ) {
+      model.error =
+        "With one line, the x-axis and y-axis close the region in the first quadrant. This curve still needs a finite side boundary — add a vertical line such as x = 4 or a domain restriction.";
+    }
   }
   state.model = model;
   state.lineErrorId = model.lineId || null;

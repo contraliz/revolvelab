@@ -3,6 +3,7 @@ import {
   compileConstant,
   compileExpression,
   containsRestriction,
+  formatExactNumber,
   formatNumber,
   integrate,
   isPolynomialIn,
@@ -136,7 +137,10 @@ function compileLine(input, index) {
       implicit: Boolean(input.implicit),
       role: input.role ?? null,
       verticalX: value,
-      source: `x = ${formatNumber(value, 6).replace("-", "−")}`,
+      source: `x = ${
+        formatExactNumber(value) ??
+        formatNumber(value, 6).replace("-", "−")
+      }`,
       core: null,
       restrictions: [],
       evaluate: () => Number.NaN,
@@ -586,6 +590,20 @@ function buildPairCells(lines, window, verticalXs = [], options = {}) {
           segment.a = Math.max(segment.a, options.clipXMin);
         }
         if (segment.b - segment.a < 1e-7) continue;
+        if (options.clipYMin !== null && options.clipYMin !== undefined) {
+          const middle = (segment.a + segment.b) / 2;
+          const lower = safeEvaluate(segment.lowerLine, middle);
+          const upper = safeEvaluate(segment.upperLine, middle);
+          const tolerance = 1e-7 * Math.max(1, Math.abs(lower), Math.abs(upper));
+          if (
+            !Number.isFinite(lower) ||
+            !Number.isFinite(upper) ||
+            lower < options.clipYMin - tolerance ||
+            upper < options.clipYMin - tolerance
+          ) {
+            continue;
+          }
+        }
         const cell = {
           ...segment,
           span: segment.b - segment.a,
@@ -660,7 +678,10 @@ function buildPairCells(lines, window, verticalXs = [], options = {}) {
 /* -------------------------------------------------------------------------- */
 
 function formatAxisValue(value) {
-  return formatNumber(value, 6).replace("-", "−");
+  return (
+    formatExactNumber(value) ??
+    formatNumber(value, 6).replace("-", "−")
+  );
 }
 
 function parseRotationLine(text) {
@@ -680,7 +701,9 @@ function parseRotationLine(text) {
       source,
       point: { x, y: 0 },
       direction: { x: 0, y: 1 },
-      label: `x = ${formatAxisValue(x)}`,
+      label: /^\s*x\s*=/.test(source)
+        ? prettyExpression(source)
+        : `x = ${formatAxisValue(x)}`,
       kind: "vertical",
       slope: null,
       intercept: null,
@@ -723,23 +746,10 @@ function parseRotationLine(text) {
 
   const horizontal = Math.abs(slope) < 1e-9;
   const intercept = y0 - slope * x0;
-  let label;
-  if (horizontal) {
-    label = `y = ${formatAxisValue(intercept)}`;
-  } else {
-    const slopeText =
-      Math.abs(slope - 1) < 1e-9
-        ? ""
-        : Math.abs(slope + 1) < 1e-9
-          ? "−"
-          : formatAxisValue(slope);
-    label = `y = ${slopeText}x`;
-    if (Math.abs(intercept) > 1e-9) {
-      label += ` ${intercept > 0 ? "+" : "−"} ${formatAxisValue(
-        Math.abs(intercept),
-      )}`;
-    }
-  }
+  const prettySource = prettyExpression(source);
+  const label = /^\s*(?:x|y)\s*=/.test(prettySource)
+    ? prettySource
+    : `y = ${prettySource}`;
 
   return makeAxis({
     source,
@@ -1390,5 +1400,8 @@ export function prettyExpression(value) {
 }
 
 export function formatBound(value, maxDecimals = 6) {
-  return formatNumber(value, maxDecimals).replace("-", "−");
+  return (
+    formatExactNumber(value) ??
+    formatNumber(value, maxDecimals).replace("-", "−")
+  );
 }

@@ -61,10 +61,12 @@ x = 4
 A leading `y =` or `f(x) =` is optional. A line beginning with `x =` is a
 vertical boundary that can close the left or right side of the region.
 
-If only one line is present, the editor assumes the remaining boundaries are the
-coordinate axes: the x-axis becomes the horizontal boundary and the y-axis
-clips the region to the first quadrant. `y = 4 - x^2` then encloses
-`0 <= x <= 2, 0 <= y <= 4 - x^2`.
+If only one function curve is present (vertical boundary lines may also be
+present), the editor assumes the remaining boundaries are the coordinate axes
+and the first quadrant (`x >= 0`, `y >= 0`). `y = 4 - x^2`
+then encloses `0 <= x <= 2, 0 <= y <= 4 - x^2`. A curve with no finite side
+boundary, such as `y = x^2`, does not produce a solid until a vertical line or
+domain restriction is added.
 
 ### Expressions
 
@@ -152,6 +154,11 @@ boundaries, `sqrt` boundaries about `y = 0`, and restricted polynomial regions
 can all produce exact results. Other shapes use adaptive Simpson integration
 (horizontal axes) or high-resolution perpendicular slicing and are labeled
 **numerical volume**.
+
+Integral limits are recognized and kept in readable exact-looking form when
+possible: `√2`, `3√2/2`, `2 − √5`, `7/3`, `−π/2`, and so on. This is local
+number recognition, not an AI model. If a value is not close to a simple
+fraction, radical, or rational multiple of π, it falls back to a decimal.
 
 The region finder looks for intervals where a pair of curves is closed at both
 ends — either because the curves meet, a domain restriction ends, or a vertical

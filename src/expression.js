@@ -890,6 +890,234 @@ export function approximateFraction(value, options = {}) {
   return null;
 }
 
+function reduceRational(numerator, denominator) {
+  const divisor = gcd(numerator, denominator);
+  return {
+    numerator: numerator / divisor,
+    denominator: denominator / divisor,
+  };
+}
+
+function signedLabel(sign, text) {
+  if (text === "0") return "0";
+  return `${sign < 0 ? "−" : ""}${text}`;
+}
+
+function rationalLabel(numerator, denominator) {
+  if (denominator === 1) return String(numerator);
+  return `${numerator}/${denominator}`;
+}
+
+function piLabel(fraction) {
+  const numerator = fraction.numerator;
+  const denominator = fraction.denominator;
+  if (numerator === 0) return "0";
+  const sign = numerator < 0 ? "−" : "";
+  const absolute = Math.abs(numerator);
+  if (denominator === 1) {
+    return `${sign}${absolute === 1 ? "" : absolute}π`;
+  }
+  return `${sign}${absolute === 1 ? "" : absolute}π/${denominator}`;
+}
+
+const SURD_CACHE = new Map();
+
+function squarefreeRadicals() {
+  const values = [];
+  for (let value = 2; value <= 30; value++) {
+    let squarefree = true;
+    for (let factor = 2; factor * factor <= value; factor++) {
+      if (value % (factor * factor) === 0) {
+        squarefree = false;
+        break;
+      }
+    }
+    if (squarefree) values.push(value);
+  }
+  return values;
+}
+
+const SQUAREFREE_RADICALS = squarefreeRadicals();
+
+function radicalText(coefficient, radicand) {
+  const absolute = Math.abs(coefficient);
+  return `${absolute === 1 ? "" : absolute}√${radicand}`;
+}
+
+function quadraticSurdLabel(value, tolerance) {
+  const key = value.toPrecision(14);
+  if (SURD_CACHE.has(key)) return SURD_CACHE.get(key);
+  let best = null;
+  for (let denominator = 1; denominator <= 3; denominator++) {
+    for (let coefficient = -3; coefficient <= 3; coefficient++) {
+      if (coefficient === 0) continue;
+      for (const radicand of SQUAREFREE_RADICALS) {
+        const sqrt = Math.sqrt(radicand);
+        for (let whole = -30; whole <= 30; whole++) {
+          const candidate = (whole + coefficient * sqrt) / denominator;
+          if (
+            Math.abs(candidate - value) >
+            Math.max(1, value) * tolerance
+          ) {
+            continue;
+          }
+          const score =
+            Math.abs(whole) +
+            Math.abs(coefficient) * 2 +
+            (denominator - 1) * 2 +
+            radicand * 0.04;
+          if (!best || score < best.score) {
+            best = { whole, coefficient, radicand, denominator, score };
+          }
+        }
+      }
+    }
+  }
+
+  let label = null;
+  if (best) {
+    let { whole, coefficient, radicand, denominator } = best;
+    const divisor = gcd(gcd(Math.abs(whole), Math.abs(coefficient)), denominator);
+    whole /= divisor;
+    coefficient /= divisor;
+    denominator /= divisor;
+
+    const radical = radicalText(coefficient, radicand);
+    if (coefficient === 0) {
+      label = whole === 0 ? "0" : rationalLabel(whole, denominator);
+    } else if (denominator === 1) {
+      if (whole === 0) {
+        label = `${coefficient < 0 ? "−" : ""}${radical}`;
+      } else if (coefficient < 0) {
+        label =
+          whole > 0
+            ? `${whole} − ${radical}`
+            : `−${Math.abs(whole)} − ${radical}`;
+      } else {
+        label =
+          whole > 0
+            ? `${whole} + ${radical}`
+            : `${radical} − ${Math.abs(whole)}`;
+      }
+    } else if (whole === 0) {
+      label = `${coefficient < 0 ? "−" : ""}${radical}/${denominator}`;
+    } else {
+      const sign = coefficient < 0 ? "−" : "+";
+      const wholeText = whole < 0 ? `−${Math.abs(whole)}` : String(whole);
+      label = `(${wholeText} ${sign} ${radical})/${denominator}`;
+    }
+  }
+
+  SURD_CACHE.set(key, label);
+  return label;
+}
+
+/**
+ * Render a computed number in a familiar exact-looking form when it is close
+ * to an integer, an improper fraction, a rational multiple of π, or a simple
+ * square-root expression. This is recognition, not symbolic algebra.
+ */
+export function formatExactNumber(value, options = {}) {
+  const {
+    maxDenominator = 200,
+    tolerance = 1e-8,
+    allowPi = true,
+    allowSqrt = true,
+  } = options;
+  if (!Number.isFinite(value)) return null;
+  const magnitude = Math.abs(value);
+  if (magnitude < 1e-10) return "0";
+  const sign = value < 0 ? -1 : 1;
+  const relative = (target) =>
+    Math.max(1, Math.abs(target)) * tolerance;
+
+  const rational = approximateFraction(magnitude, {
+    maxDenominator,
+    tolerance,
+  });
+  if (
+    rational &&
+    Math.abs(magnitude - rational.numerator / rational.denominator) <=
+      relative(magnitude)
+  ) {
+    return signedLabel(
+      sign,
+      rationalLabel(rational.numerator, rational.denominator),
+    );
+  }
+
+  if (allowPi) {
+    const piFraction = approximateFraction(magnitude / Math.PI, {
+      maxDenominator: 48,
+      tolerance,
+    });
+    if (
+      piFraction &&
+      Math.abs(
+        magnitude - (piFraction.numerator / piFraction.denominator) * Math.PI,
+      ) <=
+        relative(magnitude)
+    ) {
+      return signedLabel(sign, piLabel(piFraction));
+    }
+  }
+
+  if (allowSqrt) {
+    const square = magnitude * magnitude;
+    const squareFraction = approximateFraction(square, {
+      maxDenominator: 200,
+      tolerance: Math.max(tolerance, 1e-9),
+    });
+    if (
+      squareFraction &&
+      squareFraction.numerator > 0 &&
+      squareFraction.denominator > 0 &&
+      Math.abs(
+        square -
+          squareFraction.numerator / squareFraction.denominator,
+      ) <=
+        relative(square)
+    ) {
+      const product =
+        squareFraction.numerator * squareFraction.denominator;
+      let squareFactor = 1;
+      for (let factor = Math.floor(Math.sqrt(product)); factor >= 1; factor--) {
+        if (product % (factor * factor) === 0) {
+          squareFactor = factor;
+          break;
+        }
+      }
+      const radicand = product / (squareFactor * squareFactor);
+      if (radicand > 1) {
+        const coefficient = reduceRational(
+          squareFactor,
+          squareFraction.denominator,
+        );
+        const coefficientText =
+          coefficient.denominator === 1
+            ? coefficient.numerator === 1
+              ? ""
+              : String(coefficient.numerator)
+            : `${coefficient.numerator}/`;
+        const denominatorText =
+          coefficient.denominator === 1 ? "" : String(coefficient.denominator);
+        const rootText = `√${radicand}`;
+        const label =
+          coefficient.denominator === 1
+            ? `${coefficientText}${rootText}`
+            : coefficient.numerator === 1
+              ? `${rootText}/${denominatorText}`
+              : `${coefficient.numerator}${rootText}/${denominatorText}`;
+        return signedLabel(sign, label);
+      }
+    }
+    const surd = quadraticSurdLabel(value, tolerance);
+    if (surd) return surd;
+  }
+
+  return null;
+}
+
 export function fractionToLabel(fraction) {
   if (!fraction) return null;
   if (fraction.denominator === 1) return String(fraction.numerator);

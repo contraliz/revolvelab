@@ -2806,6 +2806,9 @@ kbd {
 }
 
 .panel .panel-hero {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
   padding: 10px 12px 9px;
   background: linear-gradient(180deg, #1a1e24, #171a1f);
   border-bottom-color: #252b33;
@@ -2971,6 +2974,10 @@ kbd {
   background: #1b1f25;
   border-color: #333b45;
   border-radius: 7px;
+}
+
+.panel .panel-hero .build-problem-button {
+  margin: 0;
 }
 
 .panel .build-problem-button:hover {

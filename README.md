@@ -188,17 +188,19 @@ double-counted.
 
 - WebGL renders only when the camera, solid, animation, or graph changes.
 - `OrbitControls.enableDamping` is off, so a released drag stops immediately.
-- Pixel ratio starts at 1.25 and drops automatically toward 0.75 when sustained
-  interaction falls below 48 fps.
+- The solid and X-ray views start at 1.25× pixel ratio and lower it only after
+  sustained low frame rates. The wireframe renders at the full device pixel
+  ratio so the contour lines stay sharp.
 - The 2D graph also lowers its backing resolution if a redraw consistently takes
   longer than a frame.
-- The solid uses lightweight Phong materials, no environment-map sampling, and
-  roughly half the previous triangle count.
-- The solid builder omits the inner surface when the shape is a disk, merges
-  adjacent patches that share the same pair of curves, and refines each profile
-  to its true zero-radius end so pointed tips close cleanly instead of being
-  sliced into a small cap.
-- The wireframe is a sparse set of meridians and rings, not a triangle mesh.
+- The solid keeps the original physical teal material and environment lighting;
+  its geometry uses roughly half the previous triangle count, and adjacent
+  patches that share the same pair of curves are merged before meshing.
+- The solid builder omits the inner surface when the shape is a disk, skips
+  zero-thickness caps, and refines each profile to its true zero-radius end so
+  pointed tips close cleanly instead of being sliced into a small cap.
+- The wireframe is a sparse set of meridians and rings rendered as lines, not a
+  triangle mesh.
 - The continuous animation loop stops as soon as playback and camera tweening
   finish.
 

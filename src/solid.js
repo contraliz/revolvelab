@@ -430,22 +430,28 @@ export function createRevolvedSolid(model) {
   group.matrixAutoUpdate = false;
   group.matrix.copy(basisForAxis(model.axis));
 
-  const outerMaterial = new THREE.MeshPhongMaterial({
+  const outerMaterial = new THREE.MeshPhysicalMaterial({
     color: 0x0d8f83,
-    specular: 0x9fe8df,
-    shininess: 52,
-    transparent: true,
-    opacity: 0.98,
-    side: THREE.FrontSide,
-  });
-
-  const innerMaterial = new THREE.MeshPhongMaterial({
-    color: 0x064747,
-    specular: 0x3b8f88,
-    shininess: 28,
+    metalness: 0.14,
+    roughness: 0.32,
+    clearcoat: 0.4,
+    clearcoatRoughness: 0.22,
     transparent: true,
     opacity: 0.98,
     side: THREE.DoubleSide,
+    envMapIntensity: 0.55,
+  });
+
+  const innerMaterial = new THREE.MeshPhysicalMaterial({
+    color: 0x064747,
+    metalness: 0.18,
+    roughness: 0.42,
+    clearcoat: 0.18,
+    clearcoatRoughness: 0.3,
+    transparent: true,
+    opacity: 0.98,
+    side: THREE.DoubleSide,
+    envMapIntensity: 0.45,
   });
 
   const capMaterial = new THREE.MeshBasicMaterial({

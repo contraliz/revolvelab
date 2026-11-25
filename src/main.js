@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
 import {
   analyzeLines,
   formatBound,
@@ -31,8 +32,9 @@ const viewport = $("#viewport");
 const canvas = $("#sceneCanvas");
 const plotCanvas = $("#plotCanvas");
 const plot = new RegionPlot(plotCanvas);
-const maxRenderScale = Math.min(window.devicePixelRatio || 1, 1.25);
-let renderScale = maxRenderScale;
+const qualityRenderScale = Math.min(window.devicePixelRatio || 1, 1.25);
+const wireRenderScale = Math.min(window.devicePixelRatio || 1, 2);
+let renderScale = qualityRenderScale;
 
 const state = {
   lines: [
@@ -100,6 +102,14 @@ controls.minPolarAngle = 0.08;
 controls.maxPolarAngle = Math.PI * 0.93;
 controls.target.set(0, 1.5, 0);
 
+const pmrem = new THREE.PMREMGenerator(renderer);
+const room = new RoomEnvironment();
+const environmentTexture = pmrem.fromScene(room, 0.03).texture;
+scene.environment = environmentTexture;
+scene.environmentIntensity = 0.36;
+room.dispose?.();
+pmrem.dispose();
+
 const hemi = new THREE.HemisphereLight(0xc8e2ff, 0x1b1512, 0.52);
 scene.add(hemi);
 
@@ -114,6 +124,10 @@ scene.add(fillLight);
 const rimLight = new THREE.DirectionalLight(0xff7c38, 1.55);
 rimLight.position.set(1.5, -4.5, -6);
 scene.add(rimLight);
+
+const topLight = new THREE.DirectionalLight(0xffffff, 0.25);
+topLight.position.set(0, 12, 0);
+scene.add(topLight);
 
 /* -------------------------------------------------------------------------- */
 /* One origin-centred xz grid plane                                           */
@@ -382,7 +396,8 @@ function updateCameraTween(now) {
 }
 
 function setRenderScale(scale) {
-  const next = clamp(scale, 0.75, maxRenderScale);
+  const cap = state.mode === "wire" ? wireRenderScale : qualityRenderScale;
+  const next = clamp(scale, 0.75, cap);
   if (Math.abs(next - renderScale) < 0.01) return;
   renderScale = next;
   const width = Math.max(viewport.clientWidth, 1);
@@ -402,7 +417,9 @@ function updateFps(now) {
   } else {
     readout.textContent = `${Math.round(fps)} FPS`;
   }
-  const active = state.interacting || state.playing || Boolean(state.cameraTween);
+  const active =
+    state.mode !== "wire" &&
+    (state.interacting || state.playing || Boolean(state.cameraTween));
   if (active && fps > 0) {
     if (fps < 50) {
       state.lowFpsWindows += 1;
@@ -1034,11 +1051,17 @@ $$(".shading-button").forEach((button) => {
   button.addEventListener("click", () => {
     const mode = button.dataset.shading;
     if (!["solid", "xray", "wire"].includes(mode)) return;
+    const previousMode = state.mode;
     state.mode = mode;
     $$(".shading-button").forEach((entry) => {
       entry.classList.toggle("active", entry.dataset.shading === mode);
     });
     state.solid?.applyMode(mode);
+    if (mode === "wire") {
+      setRenderScale(wireRenderScale);
+    } else if (previousMode === "wire") {
+      setRenderScale(qualityRenderScale);
+    }
     updateChrome();
     requestRender();
   });

@@ -1,146 +1,141 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
-import { CASES, approximateVolume } from "./data.js";
-import { createRevolvedSolid, createWashers } from "./solid.js";
-import { buildCustomProblem } from "./custom-problem.js";
+import {
+  analyzeLines,
+  formatBound,
+  prettyExpression,
+} from "./region.js";
+import { createRevolvedSolid, disposeRevolvedSolid } from "./solid.js";
+import { RegionPlot } from "./plot2d.js";
 import { formatNumber } from "./expression.js";
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 const DEG = Math.PI / 180;
+const TAU = Math.PI * 2;
 const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-const numberFormat = new Intl.NumberFormat("en-US");
 
+const COLORS = [
+  "#ff9950",
+  "#4bd7c2",
+  "#6e9fff",
+  "#c5a3ff",
+  "#73dda8",
+  "#e9c46a",
+  "#ed7b6d",
+];
+
+const appShell = $("#appShell");
 const viewport = $("#viewport");
 const canvas = $("#sceneCanvas");
+const plotCanvas = $("#plotCanvas");
+const plot = new RegionPlot(plotCanvas);
 
 const state = {
-  activeCaseId: null,
+  lines: [
+    { id: "line-1", text: "-x^2 + 4x", color: COLORS[0] },
+    { id: "line-2", text: "0", color: COLORS[1] },
+  ],
+  axisText: "y = 0",
+  lineSequence: 2,
+  newLineId: null,
+  model: null,
+  solid: null,
+  view: "2d",
   mode: "solid",
-  angle: 360,
-  approx: false,
-  slices: 24,
-  playing: false,
   grid: true,
-  tool: "orbit",
+  playing: false,
+  sweep: 360,
+  stale: true,
+  cameraTween: null,
+  playAfterCamera: false,
+  analyzeTimer: 0,
+  lineErrorId: null,
+  lastTime: performance.now(),
+  fpsFrames: 0,
+  fpsWindowStart: performance.now(),
+  animationFrame: 0,
+  needsRender: true,
+  lastTriangleUpdate: 0,
+  idleTimer: 0,
 };
-
-const PRESET_PROBLEM = {
-  id: "preset",
-  source: "preset",
-  title: "Parabolic cap",
-  shortLabel: "Parabolic cap",
-  kicker: "VOLUME STUDY 01",
-  aboutTitle: "One region.<br />Three axes.",
-  region: {
-    equation: "y = −x² + 4x",
-    domainLabel: "0 ≤ x ≤ 4 · 0 ≤ y ≤ f(x)",
-    description:
-      "The bounded region between y = −x² + 4x and the x-axis, rotated about three different horizontal lines.",
-  },
-  variants: CASES,
-};
-
-const problemRegistry = new Map([["preset", PRESET_PROBLEM]]);
-let currentProblem = PRESET_PROBLEM;
-let currentProblemVariants = new Map(CASES.map((item) => [item.id, item]));
-let solidSets = {};
-let activeSolid = null;
-let activeCase = null;
-let washerGroup = null;
-let washerTimer = 0;
-let introAnimation = null;
-let cameraTween = null;
-let toastTimer = 0;
-let aiRequestSerial = 0;
-let lastTime = performance.now();
-let fpsFrames = 0;
-let fpsTime = 0;
-let lastTriangleUpdate = 0;
 
 /* -------------------------------------------------------------------------- */
-/* Renderer, scene, and cameras                                               */
+/* Renderer, scene, camera                                                    */
 /* -------------------------------------------------------------------------- */
 
 const renderer = new THREE.WebGLRenderer({
   canvas,
   antialias: true,
   alpha: true,
-  preserveDrawingBuffer: true,
+  preserveDrawingBuffer: false,
   powerPreference: "high-performance",
 });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
 renderer.setClearColor(0x000000, 0);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.06;
+renderer.toneMappingExposure = 1.05;
 
 const scene = new THREE.Scene();
-scene.fog = new THREE.FogExp2(0x11151a, 0.0095);
+scene.fog = new THREE.FogExp2(0x11151a, 0.0085);
 
-const camera = new THREE.PerspectiveCamera(38, 1, 0.1, 120);
+const camera = new THREE.PerspectiveCamera(38, 1, 0.1, 160);
+camera.position.set(8, 6, 11);
 
 const controls = new OrbitControls(camera, renderer.domElement);
-controls.enableDamping = true;
-controls.dampingFactor = 0.075;
+controls.enableDamping = false;
 controls.screenSpacePanning = true;
-controls.rotateSpeed = 0.78;
-controls.panSpeed = 0.7;
+controls.rotateSpeed = 0.76;
+controls.panSpeed = 0.72;
 controls.zoomSpeed = 0.82;
-controls.minDistance = 5;
-controls.maxDistance = 46;
+controls.minDistance = 2.5;
+controls.maxDistance = 90;
 controls.minPolarAngle = 0.08;
 controls.maxPolarAngle = Math.PI * 0.93;
-controls.target.set(2, 0, 0);
+controls.target.set(0, 1.5, 0);
 
-/* Studio environment. */
 const pmrem = new THREE.PMREMGenerator(renderer);
 const room = new RoomEnvironment();
 const environmentTexture = pmrem.fromScene(room, 0.03).texture;
 scene.environment = environmentTexture;
-scene.environmentIntensity = 0.38;
+scene.environmentIntensity = 0.36;
 room.dispose?.();
 pmrem.dispose();
 
-/* A restrained three-point setup keeps the jade material readable on dark. */
 const hemi = new THREE.HemisphereLight(0xc8e2ff, 0x1b1512, 0.52);
 scene.add(hemi);
 
-const keyLight = new THREE.DirectionalLight(0xfff2df, 1.95);
+const keyLight = new THREE.DirectionalLight(0xfff2df, 1.9);
 keyLight.position.set(6.5, 8.5, 7);
 scene.add(keyLight);
 
-const fillLight = new THREE.DirectionalLight(0x6edcd6, 0.82);
+const fillLight = new THREE.DirectionalLight(0x6edcd6, 0.78);
 fillLight.position.set(-7, 3.8, -5);
 scene.add(fillLight);
 
-const rimLight = new THREE.DirectionalLight(0xff7c38, 1.65);
+const rimLight = new THREE.DirectionalLight(0xff7c38, 1.55);
 rimLight.position.set(1.5, -4.5, -6);
 scene.add(rimLight);
 
-const topLight = new THREE.DirectionalLight(0xffffff, 0.28);
+const topLight = new THREE.DirectionalLight(0xffffff, 0.25);
 topLight.position.set(0, 12, 0);
 scene.add(topLight);
 
 /* -------------------------------------------------------------------------- */
-/* Floor grid, contact shadow, and axis                                       */
+/* One origin-centred xz grid plane                                           */
 /* -------------------------------------------------------------------------- */
 
-const floorGroup = new THREE.Group();
-scene.add(floorGroup);
-
-function makeGridMaterial(plane, opacity) {
+function makeGridMaterial() {
   return new THREE.ShaderMaterial({
     transparent: true,
     depthWrite: false,
     side: THREE.FrontSide,
     toneMapped: false,
     uniforms: {
-      uFadeCenter: { value: new THREE.Vector2(2, 0) },
-      uPlane: { value: plane },
-      uOpacity: { value: opacity },
+      uOpacity: { value: 1 },
     },
     vertexShader: /* glsl */ `
       varying vec3 vWorld;
@@ -151,9 +146,7 @@ function makeGridMaterial(plane, opacity) {
       }
     `,
     fragmentShader: /* glsl */ `
-      uniform vec2 uFadeCenter;
       uniform float uOpacity;
-      uniform int uPlane;
       varying vec3 vWorld;
 
       float gridMask(vec2 p, float scale) {
@@ -164,23 +157,15 @@ function makeGridMaterial(plane, opacity) {
       }
 
       void main() {
-        vec2 p;
-        if (uPlane == 0) {
-          p = vWorld.xz;
-        } else if (uPlane == 1) {
-          p = vWorld.xy;
-        } else {
-          p = vWorld.zy;
-        }
-
+        vec2 p = vWorld.xz;
         float minor = gridMask(p, 1.0);
         float major = gridMask(p, 5.0);
-        float distanceFade = 1.0 - smoothstep(11.0, 31.0, length(p - uFadeCenter));
+        float distanceFade = 1.0 - smoothstep(12.0, 34.0, length(p));
 
         vec3 minorColor = vec3(0.205, 0.238, 0.274);
         vec3 majorColor = vec3(0.325, 0.365, 0.414);
         vec3 color = mix(minorColor, majorColor, major);
-        float alpha = (minor * 0.28 + major * 0.38) * distanceFade * uOpacity;
+        float alpha = (minor * 0.27 + major * 0.38) * distanceFade * uOpacity;
 
         if (alpha < 0.004) discard;
         gl_FragColor = vec4(color, alpha);
@@ -189,1754 +174,944 @@ function makeGridMaterial(plane, opacity) {
   });
 }
 
-const gridMaterial = makeGridMaterial(0, 1.0);
-const grid = new THREE.Mesh(new THREE.PlaneGeometry(80, 80), gridMaterial);
+const gridMaterial = makeGridMaterial();
+const grid = new THREE.Mesh(new THREE.PlaneGeometry(84, 84), gridMaterial);
 grid.rotation.x = -Math.PI / 2;
+grid.position.set(0, 0, 0);
 grid.renderOrder = -3;
-floorGroup.add(grid);
+scene.add(grid);
 
-const backGridMaterial = makeGridMaterial(1, 0.62);
-const backGrid = new THREE.Mesh(new THREE.PlaneGeometry(80, 80), backGridMaterial);
-backGrid.renderOrder = -3;
-floorGroup.add(backGrid);
+/* -------------------------------------------------------------------------- */
+/* Coordinate axes through the true origin                                    */
+/* -------------------------------------------------------------------------- */
 
-const sideGridMaterial = makeGridMaterial(2, 0.52);
-const sideGrid = new THREE.Mesh(new THREE.PlaneGeometry(80, 80), sideGridMaterial);
-sideGrid.rotation.y = Math.PI / 2;
-sideGrid.renderOrder = -3;
-floorGroup.add(sideGrid);
+const coordinateGroup = new THREE.Group();
+scene.add(coordinateGroup);
 
-function makeShadowTexture() {
-  const size = 128;
-  const shadowCanvas = document.createElement("canvas");
-  shadowCanvas.width = size;
-  shadowCanvas.height = size;
-  const ctx = shadowCanvas.getContext("2d");
-  const gradient = ctx.createRadialGradient(
-    size / 2,
-    size / 2,
-    size * 0.02,
-    size / 2,
-    size / 2,
-    size * 0.5,
-  );
-  gradient.addColorStop(0, "rgba(0, 0, 0, 0.64)");
-  gradient.addColorStop(0.38, "rgba(0, 0, 0, 0.4)");
-  gradient.addColorStop(0.72, "rgba(0, 0, 0, 0.12)");
-  gradient.addColorStop(1, "rgba(0, 0, 0, 0)");
-  ctx.fillStyle = gradient;
-  ctx.fillRect(0, 0, size, size);
-  const texture = new THREE.CanvasTexture(shadowCanvas);
-  texture.colorSpace = THREE.SRGBColorSpace;
-  texture.needsUpdate = true;
-  return texture;
+const AXIS_EXTENT = 26;
+const axisMaterials = {
+  x: new THREE.LineBasicMaterial({ color: 0xc6a08c, transparent: true, opacity: 0.32, depthWrite: false }),
+  y: new THREE.LineBasicMaterial({ color: 0x9bbdaa, transparent: true, opacity: 0.3, depthWrite: false }),
+  z: new THREE.LineBasicMaterial({ color: 0x95aed0, transparent: true, opacity: 0.3, depthWrite: false }),
+};
+
+function addCoordinateLine(start, end, material) {
+  const geometry = new THREE.BufferGeometry().setFromPoints([start, end]);
+  const line = new THREE.Line(geometry, material);
+  line.renderOrder = -1;
+  coordinateGroup.add(line);
 }
 
-const shadowMesh = new THREE.Mesh(
-  new THREE.PlaneGeometry(1, 1),
-  new THREE.MeshBasicMaterial({
-    map: makeShadowTexture(),
+addCoordinateLine(
+  new THREE.Vector3(-AXIS_EXTENT, 0, 0),
+  new THREE.Vector3(AXIS_EXTENT, 0, 0),
+  axisMaterials.x,
+);
+addCoordinateLine(
+  new THREE.Vector3(0, -AXIS_EXTENT, 0),
+  new THREE.Vector3(0, AXIS_EXTENT, 0),
+  axisMaterials.y,
+);
+addCoordinateLine(
+  new THREE.Vector3(0, 0, -AXIS_EXTENT),
+  new THREE.Vector3(0, 0, AXIS_EXTENT),
+  axisMaterials.z,
+);
+
+function makeAxisLabel(text, color) {
+  const labelCanvas = document.createElement("canvas");
+  labelCanvas.width = 96;
+  labelCanvas.height = 96;
+  const context = labelCanvas.getContext("2d");
+  context.clearRect(0, 0, 96, 96);
+  context.font = '600 46px "MesloLGS Nerd Font", monospace';
+  context.textAlign = "center";
+  context.textBaseline = "middle";
+  context.fillStyle = color;
+  context.fillText(text, 48, 50);
+  const texture = new THREE.CanvasTexture(labelCanvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  const material = new THREE.SpriteMaterial({
+    map: texture,
     transparent: true,
-    opacity: 0.72,
+    depthTest: false,
     depthWrite: false,
     toneMapped: false,
-  }),
+  });
+  const sprite = new THREE.Sprite(material);
+  sprite.scale.set(1.1, 1.1, 1);
+  sprite.renderOrder = 5;
+  coordinateGroup.add(sprite);
+  return sprite;
+}
+
+const axisLabels = {
+  x: makeAxisLabel("x", "#d9aa91"),
+  y: makeAxisLabel("y", "#a7cfb8"),
+  z: makeAxisLabel("z", "#a9c1e1"),
+};
+axisLabels.x.position.set(AXIS_EXTENT * 0.74, 0.5, 0);
+axisLabels.y.position.set(0.5, AXIS_EXTENT * 0.74, 0);
+axisLabels.z.position.set(0, 0.5, AXIS_EXTENT * 0.74);
+
+const originDot = new THREE.Mesh(
+  new THREE.SphereGeometry(0.055, 12, 12),
+  new THREE.MeshBasicMaterial({ color: 0xe8edf2, toneMapped: false }),
 );
-shadowMesh.rotation.x = -Math.PI / 2;
-shadowMesh.renderOrder = -2;
-floorGroup.add(shadowMesh);
+originDot.renderOrder = 4;
+coordinateGroup.add(originDot);
 
-const axisVisual = new THREE.Group();
-scene.add(axisVisual);
+/* -------------------------------------------------------------------------- */
+/* Rotation axis visual                                                       */
+/* -------------------------------------------------------------------------- */
 
-const axisMaterial = new THREE.LineDashedMaterial({
+const rotationAxisMaterial = new THREE.LineDashedMaterial({
   color: 0xff9950,
-  dashSize: 0.12,
-  gapSize: 0.1,
+  dashSize: 0.34,
+  gapSize: 0.24,
   transparent: true,
-  opacity: 0.62,
-  depthTest: false,
-  depthWrite: false,
-});
-const axisGeometry = new THREE.BufferGeometry().setFromPoints([
-  new THREE.Vector3(-0.78, 0, 0),
-  new THREE.Vector3(4.78, 0, 0),
-]);
-const axisLine = new THREE.Line(axisGeometry, axisMaterial);
-axisLine.computeLineDistances();
-axisLine.renderOrder = 20;
-axisVisual.add(axisLine);
-
-const axisTipMaterial = new THREE.MeshBasicMaterial({
-  color: 0xffa361,
-  transparent: true,
-  opacity: 0.8,
-  depthTest: false,
+  opacity: 0.9,
   depthWrite: false,
   toneMapped: false,
 });
-const axisTipGeometry = new THREE.ConeGeometry(0.052, 0.2, 14);
-const leftTip = new THREE.Mesh(axisTipGeometry, axisTipMaterial);
-leftTip.position.x = -0.79;
-leftTip.rotation.z = Math.PI / 2;
-leftTip.renderOrder = 21;
-axisVisual.add(leftTip);
-const rightTip = new THREE.Mesh(axisTipGeometry, axisTipMaterial);
-rightTip.position.x = 4.79;
-rightTip.rotation.z = -Math.PI / 2;
-rightTip.renderOrder = 21;
-axisVisual.add(rightTip);
-
-/* -------------------------------------------------------------------------- */
-/* Coordinate axes                                                            */
-/* -------------------------------------------------------------------------- */
-
-const coordinateAxesGroup = new THREE.Group();
-scene.add(coordinateAxesGroup);
-
-const axisColor = 0xc3ccd6;
-const axisLabelColor = "#cfd7e1";
-
-function makeCoordinateLine() {
-  return new THREE.Line(
-    new THREE.BufferGeometry(),
-    new THREE.LineBasicMaterial({
-      color: axisColor,
-      transparent: true,
-      opacity: 0.36,
-      depthTest: false,
-      depthWrite: false,
-      toneMapped: false,
-    }),
-  );
-}
-
-function makeCoordinateBadge(letter) {
-  const canvas = document.createElement("canvas");
-  canvas.width = 128;
-  canvas.height = 128;
-  const ctx = canvas.getContext("2d");
-  ctx.clearRect(0, 0, 128, 128);
-  ctx.font = '600 58px "MesloLGS Nerd Font", monospace';
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
-  ctx.lineWidth = 7;
-  ctx.strokeStyle = "rgba(8, 11, 15, 0.9)";
-  ctx.fillStyle = axisLabelColor;
-  ctx.strokeText(letter, 64, 68);
-  ctx.fillText(letter, 64, 68);
-
-  const texture = new THREE.CanvasTexture(canvas);
-  texture.colorSpace = THREE.SRGBColorSpace;
-  texture.needsUpdate = true;
-  const sprite = new THREE.Sprite(
-    new THREE.SpriteMaterial({
-      map: texture,
-      transparent: true,
-      opacity: 0.78,
-      depthTest: false,
-      depthWrite: false,
-      toneMapped: false,
-    }),
-  );
-  sprite.scale.set(0.44, 0.44, 1);
-  sprite.renderOrder = 32;
-  return sprite;
-}
-
-const coordXLine = makeCoordinateLine();
-const coordYLine = makeCoordinateLine();
-const coordZLine = makeCoordinateLine();
-const coordXBadge = makeCoordinateBadge("x");
-const coordYBadge = makeCoordinateBadge("y");
-const coordZBadge = makeCoordinateBadge("z");
-coordinateAxesGroup.add(
-  coordXLine,
-  coordYLine,
-  coordZLine,
-  coordXBadge,
-  coordYBadge,
-  coordZBadge,
+const rotationAxis = new THREE.Line(
+  new THREE.BufferGeometry(),
+  rotationAxisMaterial,
 );
-
-function makeCoordinateTicks() {
-  return new THREE.LineSegments(
-    new THREE.BufferGeometry(),
-    new THREE.LineBasicMaterial({
-      color: axisColor,
-      transparent: true,
-      opacity: 0.22,
-      depthTest: false,
-      depthWrite: false,
-      toneMapped: false,
-    }),
-  );
-}
-
-const coordXTicks = makeCoordinateTicks();
-const coordYTicks = makeCoordinateTicks();
-const coordZTicks = makeCoordinateTicks();
-coordinateAxesGroup.add(coordXTicks, coordYTicks, coordZTicks);
-
-const coordinateLabelsGroup = new THREE.Group();
-coordinateAxesGroup.add(coordinateLabelsGroup);
-const numberTextureCache = new Map();
-
-function setCoordinateLine(line, points) {
-  line.geometry.dispose();
-  line.geometry = new THREE.BufferGeometry().setFromPoints(points);
-}
-
-function makeNumberSprite(text, color, scale) {
-  const key = `${color}|${text}`;
-  let texture = numberTextureCache.get(key);
-  if (!texture) {
-    const canvas = document.createElement("canvas");
-    canvas.width = 160;
-    canvas.height = 80;
-    const ctx = canvas.getContext("2d");
-    ctx.clearRect(0, 0, 160, 80);
-    ctx.font = '600 40px "MesloLGS Nerd Font", monospace';
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    ctx.lineWidth = 7;
-    ctx.strokeStyle = "rgba(8, 11, 15, 0.92)";
-    ctx.fillStyle = color;
-    ctx.strokeText(text, 80, 42);
-    ctx.fillText(text, 80, 42);
-    texture = new THREE.CanvasTexture(canvas);
-    texture.colorSpace = THREE.SRGBColorSpace;
-    texture.needsUpdate = true;
-    numberTextureCache.set(key, texture);
-  }
-
-  const sprite = new THREE.Sprite(
-    new THREE.SpriteMaterial({
-      map: texture,
-      transparent: true,
-      opacity: 0.9,
-      sizeAttenuation: true,
-      depthTest: false,
-      depthWrite: false,
-      toneMapped: false,
-    }),
-  );
-  sprite.scale.set(scale, scale * 0.5, 1);
-  sprite.renderOrder = 31;
-  return sprite;
-}
-
-function clearCoordinateLabels() {
-  for (const sprite of [...coordinateLabelsGroup.children]) {
-    coordinateLabelsGroup.remove(sprite);
-    sprite.material.dispose();
-  }
-}
-
-function formatAxisNumber(value) {
-  return String(Math.round(value)).replace("-", "−");
-}
-
-function labelStepFor(start, end) {
-  const span = end - start;
-  if (span > 16) return 5;
-  if (span > 6) return 2;
-  return 1;
-}
-
-function updateCoordinateNumbers(
-  anchorX,
-  xStart,
-  xEnd,
-  yStart,
-  yEnd,
-  zStart,
-  zEnd,
-  scale,
-) {
-  clearCoordinateLabels();
-  const labelScale = clamp(scale * 0.95, 0.38, 0.68);
-  const axisExtent = 30;
-  const majorStep = 5;
-  const round = (value) => Math.round(value * 1e6) / 1e6;
-  const addValues = (values, start, end, step) => {
-    for (let value = Math.ceil(start / step) * step; value <= end + 1e-6; value += step) {
-      values.add(round(value));
-    }
-  };
-
-  if (xStart <= 0 && xEnd >= 0) {
-    const zero = makeNumberSprite("0", "#c6cdd6", labelScale * 0.88);
-    zero.position.set(0, -0.3, 0);
-    coordinateLabelsGroup.add(zero);
-  }
-
-  const xValues = new Set();
-  addValues(xValues, xStart, xEnd, labelStepFor(xStart, xEnd));
-  addValues(xValues, -axisExtent, axisExtent, majorStep);
-  for (const x of [...xValues].sort((a, b) => a - b)) {
-    if (Math.abs(x) < 1e-6) continue;
-    const sprite = makeNumberSprite(formatAxisNumber(x), "#e9eef5", labelScale);
-    sprite.position.set(x, -0.3, 0);
-    coordinateLabelsGroup.add(sprite);
-  }
-
-  const yValues = new Set();
-  addValues(yValues, yStart, yEnd, labelStepFor(yStart, yEnd));
-  addValues(yValues, -axisExtent, axisExtent, majorStep);
-  for (const y of [...yValues].sort((a, b) => a - b)) {
-    if (Math.abs(y) < 1e-6) continue;
-    const sprite = makeNumberSprite(formatAxisNumber(y), "#e9eef5", labelScale);
-    sprite.position.set(anchorX - 0.32, y, 0);
-    coordinateLabelsGroup.add(sprite);
-  }
-
-  const zValues = new Set();
-  addValues(zValues, zStart, zEnd, labelStepFor(zStart, zEnd));
-  addValues(zValues, -axisExtent, axisExtent, majorStep);
-  for (const z of [...zValues].sort((a, b) => a - b)) {
-    if (Math.abs(z) < 1e-6) continue;
-    const sprite = makeNumberSprite(formatAxisNumber(z), "#e9eef5", labelScale);
-    sprite.position.set(anchorX, 0.3, z);
-    coordinateLabelsGroup.add(sprite);
-  }
-}
-
-function setTickGeometry(lines, points) {
-  lines.geometry.dispose();
-  lines.geometry = new THREE.BufferGeometry().setFromPoints(points);
-}
-
-function tickStepFor(start, end) {
-  const span = end - start;
-  if (span > 24) return 5;
-  if (span > 12) return 2;
-  return 1;
-}
-
-function updateCoordinateTicks(anchorX, xStart, xEnd, yStart, yEnd, zStart, zEnd) {
-  const span = Math.max(xEnd - xStart, yEnd - yStart, zEnd - zStart);
-  const baseTick = clamp(span * 0.01, 0.035, 0.08);
-
-  const xPoints = [];
-  const xStep = tickStepFor(xStart, xEnd);
-  for (let x = Math.ceil(xStart / xStep) * xStep; x <= xEnd + 1e-6; x += xStep) {
-    const length = Math.abs(x / 5 - Math.round(x / 5)) < 1e-6 ? baseTick * 1.9 : baseTick;
-    xPoints.push(
-      new THREE.Vector3(x, 0, -length),
-      new THREE.Vector3(x, 0, length),
-    );
-  }
-  setTickGeometry(coordXTicks, xPoints);
-
-  const yPoints = [];
-  const yStep = tickStepFor(yStart, yEnd);
-  for (let y = Math.ceil(yStart / yStep) * yStep; y <= yEnd + 1e-6; y += yStep) {
-    const length = Math.abs(y / 5 - Math.round(y / 5)) < 1e-6 ? baseTick * 1.9 : baseTick;
-    yPoints.push(
-      new THREE.Vector3(anchorX - length, y, 0),
-      new THREE.Vector3(anchorX + length, y, 0),
-    );
-  }
-  setTickGeometry(coordYTicks, yPoints);
-
-  const zPoints = [];
-  const zStep = tickStepFor(zStart, zEnd);
-  for (let z = Math.ceil(zStart / zStep) * zStep; z <= zEnd + 1e-6; z += zStep) {
-    const length = Math.abs(z / 5 - Math.round(z / 5)) < 1e-6 ? baseTick * 1.9 : baseTick;
-    zPoints.push(
-      new THREE.Vector3(anchorX - length, 0, z),
-      new THREE.Vector3(anchorX + length, 0, z),
-    );
-  }
-  setTickGeometry(coordZTicks, zPoints);
-}
-
-function updateCoordinateAxes(problem) {
-  const x0 = problem.domain?.x0 ?? 0;
-  const x1 = problem.domain?.x1 ?? 4;
-  const xLow = Math.min(x0, x1);
-  const xHigh = Math.max(x0, x1);
-  const maxRadius = Math.max(problem.maxRadius, 0.5);
-  const anchorX = clamp(0, xLow, xHigh);
-  const xStart = xLow - 0.45;
-  const xEnd = xHigh + 0.55;
-  const yStart = Math.min(0, problem.axisValue - maxRadius) - 0.45;
-  const yEnd = Math.max(0, problem.axisValue + maxRadius) + 0.5;
-  const zStart = -maxRadius - 0.35;
-  const zEnd = maxRadius + 0.55;
-
-  const axisExtent = 30;
-
-  setCoordinateLine(coordXLine, [
-    new THREE.Vector3(-axisExtent, 0, 0),
-    new THREE.Vector3(axisExtent, 0, 0),
-  ]);
-  setCoordinateLine(coordYLine, [
-    new THREE.Vector3(anchorX, -axisExtent, 0),
-    new THREE.Vector3(anchorX, axisExtent, 0),
-  ]);
-  setCoordinateLine(coordZLine, [
-    new THREE.Vector3(anchorX, 0, -axisExtent),
-    new THREE.Vector3(anchorX, 0, axisExtent),
-  ]);
-
-  updateCoordinateTicks(
-    anchorX,
-    -axisExtent,
-    axisExtent,
-    -axisExtent,
-    axisExtent,
-    -axisExtent,
-    axisExtent,
-  );
-
-  const badgeScale = clamp(Math.max(xHigh - xLow, maxRadius) * 0.06, 0.4, 0.65);
-  coordXBadge.position.set(xEnd + 0.26, 0.26, 0);
-  coordYBadge.position.set(anchorX + 0.22, yEnd + 0.04, 0);
-  coordZBadge.position.set(anchorX + 0.22, 0.26, zEnd + 0.08);
-  for (const badge of [coordXBadge, coordYBadge, coordZBadge]) {
-    badge.scale.set(badgeScale, badgeScale, 1);
-  }
-
-  updateCoordinateNumbers(
-    anchorX,
-    xStart,
-    xEnd,
-    yStart,
-    yEnd,
-    zStart,
-    zEnd,
-    badgeScale,
-  );
-}
-
-function updateAxisVisual(axisValue, x0, x1) {
-  const points = [
-    new THREE.Vector3(x0 - 0.78, 0, 0),
-    new THREE.Vector3(x1 + 0.78, 0, 0),
-  ];
-  axisLine.geometry.dispose();
-  axisLine.geometry = new THREE.BufferGeometry().setFromPoints(points);
-  axisLine.computeLineDistances();
-  leftTip.position.x = x0 - 0.79;
-  rightTip.position.x = x1 + 0.79;
-  axisVisual.position.y = axisValue;
-}
-
-function placeStudio(problem) {
-  const { x0 = 0, x1 = 4 } = problem.domain || {};
-  const xLow = Math.min(x0, x1);
-  const xHigh = Math.max(x0, x1);
-  const xMid = (xLow + xHigh) / 2;
-  const span = Math.max(xHigh - xLow, 0.5);
-  const floorY = problem.axisValue - problem.maxRadius - 1.28;
-  const ceilingY = problem.axisValue + problem.maxRadius + 1.1;
-  const wallCenterY = (floorY + ceilingY) / 2;
-  const backWallZ = -problem.maxRadius - 1.35;
-  const sideWallX = xLow - 1.05;
-
-  grid.position.set(0, floorY, 0);
-  gridMaterial.uniforms.uFadeCenter.value.set(xMid, 0);
-
-  backGrid.position.set(xMid, wallCenterY, backWallZ);
-  backGridMaterial.uniforms.uFadeCenter.value.set(xMid, wallCenterY);
-
-  sideGrid.position.set(sideWallX, wallCenterY, 0);
-  sideGridMaterial.uniforms.uFadeCenter.value.set(0, wallCenterY);
-
-  const shadowWidth = span * 1.3 + problem.maxRadius * 1.35 + 1.2;
-  const shadowDepth = problem.maxRadius * 2.35 + 1.2;
-  shadowMesh.position.set(xMid, floorY + 0.012, 0);
-  shadowMesh.scale.set(shadowWidth, shadowDepth, 1);
-
-  updateAxisVisual(problem.axisValue, x0, x1);
-  updateCoordinateAxes(problem);
-}
-
-/* -------------------------------------------------------------------------- */
-/* Case UI and selection                                                      */
-/* -------------------------------------------------------------------------- */
-
-function paddingForMethod(method) {
-  return method.toUpperCase();
-}
-
-const SVG_NAMESPACE = "http://www.w3.org/2000/svg";
-
-function svgElement(tag, attributes = {}) {
-  const node = document.createElementNS(SVG_NAMESPACE, tag);
-  for (const [key, value] of Object.entries(attributes)) {
-    node.setAttribute(key, String(value));
-  }
-  return node;
-}
-
-function niceStep(range, target = 5) {
-  const rough = Math.max(range / target, 1e-9);
-  const power = Math.pow(10, Math.floor(Math.log10(rough)));
-  const fraction = rough / power;
-  const nice =
-    fraction <= 1 ? 1 : fraction <= 2 ? 2 : fraction <= 5 ? 5 : 10;
-  return nice * power;
-}
-
-function formatTick(value, step) {
-  const decimals = step < 0.1 ? 2 : step < 1 ? 1 : 0;
-  return formatNumber(value, decimals).replace("-", "−");
-}
-
-function renderRegionGraph(variant) {
-  const svg = $("#regionGraph");
-  if (!svg || !variant) return;
-  svg.replaceChildren();
-
-  const { x0 = 0, x1 = 4 } = variant.domain || {};
-  const axis = variant.axisValue;
-  const regionAboveAxis = Math.abs(variant.startAngle) < 0.01;
-  const lowerAt = regionAboveAxis
-    ? (x) => axis + variant.inner(x)
-    : (x) => axis - variant.outer(x);
-  const upperAt = regionAboveAxis
-    ? (x) => axis + variant.outer(x)
-    : (x) => axis - variant.inner(x);
-
-  const sampleCount = 110;
-  const samples = [];
-  for (let i = 0; i <= sampleCount; i++) {
-    const x = x0 + ((x1 - x0) * i) / sampleCount;
-    samples.push({
-      x,
-      lower: lowerAt(x),
-      upper: upperAt(x),
-    });
-  }
-
-  const xRangeBase = Math.abs(x1 - x0) || 1;
-  const minY = Math.min(axis, ...samples.map((point) => point.lower));
-  const maxY = Math.max(axis, ...samples.map((point) => point.upper));
-  const yRangeBase = Math.max(maxY - minY, 0.5);
-
-  const xPadding = xRangeBase * 0.055 + 0.08;
-  const yPadding = yRangeBase * 0.12 + 0.12;
-  const view = {
-    xMin: Math.min(x0, x1) - xPadding,
-    xMax: Math.max(x0, x1) + xPadding,
-    yMin: minY - yPadding,
-    yMax: maxY + yPadding,
-  };
-
-  const width = 280;
-  const height = 150;
-  const margin = { left: 25, right: 10, top: 9, bottom: 19 };
-  const plotWidth = width - margin.left - margin.right;
-  const plotHeight = height - margin.top - margin.bottom;
-
-  const mapX = (x) =>
-    margin.left + ((x - view.xMin) / (view.xMax - view.xMin)) * plotWidth;
-  const mapY = (y) =>
-    margin.top + ((view.yMax - y) / (view.yMax - view.yMin)) * plotHeight;
-
-  const xStep = niceStep(view.xMax - view.xMin, 5);
-  const yStep = niceStep(view.yMax - view.yMin, 3.5);
-  const gridGroup = svgElement("g");
-
-  for (
-    let value = Math.ceil(view.xMin / xStep) * xStep;
-    value <= view.xMax + xStep * 0.001;
-    value += xStep
-  ) {
-    const x = mapX(value);
-    gridGroup.append(
-      svgElement("line", {
-        x1: x,
-        y1: margin.top,
-        x2: x,
-        y2: margin.top + plotHeight,
-        class: Math.abs(value) < xStep * 0.001 ? "graph-axis" : "graph-gridline",
-      }),
-    );
-    if (Math.abs(value) > xStep * 0.001) {
-      const label = svgElement("text", {
-        x,
-        y: height - 6,
-        class: "graph-tick",
-        "text-anchor": "middle",
-      });
-      label.textContent = formatTick(value, xStep);
-      gridGroup.append(label);
-    }
-  }
-
-  for (
-    let value = Math.ceil(view.yMin / yStep) * yStep;
-    value <= view.yMax + yStep * 0.001;
-    value += yStep
-  ) {
-    const y = mapY(value);
-    gridGroup.append(
-      svgElement("line", {
-        x1: margin.left,
-        y1: y,
-        x2: margin.left + plotWidth,
-        y2: y,
-        class: Math.abs(value) < yStep * 0.001 ? "graph-axis" : "graph-gridline",
-      }),
-    );
-    if (Math.abs(value) > yStep * 0.001) {
-      const label = svgElement("text", {
-        x: margin.left - 4,
-        y: y + 2,
-        class: "graph-tick",
-        "text-anchor": "end",
-      });
-      label.textContent = formatTick(value, yStep);
-      gridGroup.append(label);
-    }
-  }
-  svg.append(gridGroup);
-
-  const regionPoints = [
-    ...samples.map((point) => `${mapX(point.x)},${mapY(point.upper)}`),
-    ...samples
-      .slice()
-      .reverse()
-      .map((point) => `${mapX(point.x)},${mapY(point.lower)}`),
-  ];
-  svg.append(
-    svgElement("path", {
-      d: `M ${regionPoints.join(" L ")} Z`,
-      class: "graph-region",
-    }),
-  );
-
-  const upperPath = samples
-    .map(
-      (point, index) =>
-        `${index === 0 ? "M" : "L"} ${mapX(point.x)} ${mapY(point.upper)}`,
-    )
-    .join(" ");
-  const lowerPath = samples
-    .map(
-      (point, index) =>
-        `${index === 0 ? "M" : "L"} ${mapX(point.x)} ${mapY(point.lower)}`,
-    )
-    .join(" ");
-
-  svg.append(
-    svgElement("path", { d: upperPath, class: "graph-upper" }),
-    svgElement("path", { d: lowerPath, class: "graph-lower" }),
-  );
-
-  const axisY = mapY(axis);
-  svg.append(
-    svgElement("line", {
-      x1: margin.left,
-      y1: axisY,
-      x2: margin.left + plotWidth,
-      y2: axisY,
-      class: "graph-rotation",
-    }),
-  );
-
-  const upperLabel = svgElement("text", {
-    x: margin.left + plotWidth - 2,
-    y: Math.max(margin.top + 7, mapY(samples.at(-1).upper) - 4),
-    class: "graph-label upper",
-    "text-anchor": "end",
-  });
-  upperLabel.textContent = "f";
-  svg.append(upperLabel);
-
-  const lowerLabel = svgElement("text", {
-    x: margin.left + plotWidth - 2,
-    y: Math.min(
-      margin.top + plotHeight - 2,
-      mapY(samples.at(-1).lower) + 8,
-    ),
-    class: "graph-label lower",
-    "text-anchor": "end",
-  });
-  lowerLabel.textContent = "g";
-  svg.append(lowerLabel);
-
-  const axisLabel = svgElement("text", {
-    x: margin.left + plotWidth - 2,
-    y: Math.max(margin.top + 7, Math.min(axisY - 4, margin.top + plotHeight - 2)),
-    class: "graph-label rotation",
-    "text-anchor": "end",
-  });
-  axisLabel.textContent = `y = ${formatNumber(axis)}`;
-  svg.append(axisLabel);
-
-  $("#graphScale").textContent = `x: ${formatNumber(x0)}…${formatNumber(x1)}`;
-}
-
-function updateCaseUI(problem) {
-  const custom = currentProblem.id === "custom";
-  $("#caseCrumb").textContent = custom
-    ? "CUSTOM STUDY"
-    : `STUDY ${problem.letter}`;
-  $("#objectName").textContent =
-    currentProblem.id === "custom"
-      ? `${currentProblem.title} · ${problem.title}`
-      : problem.title;
-  $("#objectMethod").textContent = `${problem.method} · ${problem.subtitle}`;
-  $("#sceneEquation").textContent = currentProblem.region.equation;
-  $("#topbarScene").textContent = custom
-    ? `Custom · ${problem.methodShort.toLowerCase()}`
-    : `Study ${problem.letter} · ${problem.methodShort.toLowerCase()}`;
-  $("#axisChipLabel").textContent = problem.axisFormula;
-
-  $("#methodBadge").textContent = paddingForMethod(problem.method);
-  $("#methodMini").textContent = problem.methodShort;
-  $("#volumeCard").classList.toggle("is-numeric", !problem.fraction);
-  $("#volumeEyebrow").textContent = problem.fraction
-    ? "EXACT VOLUME"
-    : "NUMERICAL VOLUME";
-  if (problem.fraction) {
-    $("#volumeNumerator").textContent = problem.fraction[0];
-    $("#volumeDenominator").textContent = problem.fraction[1];
-  }
-  $("#volumeDecimal").textContent = problem.volume.toFixed(3);
-  $("#volumeCaption").textContent = problem.caption;
-  $("#radiusSummary").textContent = problem.radiusSummary;
-  $("#integralText").textContent = problem.integral;
-  $("#expansionText").textContent = problem.expansion || "";
-  $("#expansionText").classList.toggle("is-hidden", !problem.expansion);
-  $("#resultText").textContent = problem.result;
-  $("#caseNote").textContent = problem.note;
-  $("#approxFormula").textContent = problem.approximationFormula;
-
-  $$(".case-button").forEach((button) => {
-    const selected = button.dataset.case === problem.id;
-    button.classList.toggle("active", selected);
-    button.setAttribute("aria-pressed", String(selected));
-  });
-
-  document.title = `Revolve Lab — ${problem.title}`;
-  renderRegionGraph(problem);
-  updateApproxUI();
-  updateStatusMessage();
-}
-
-function makeCaseButton(variant) {
-  const button = document.createElement("button");
-  button.className = "case-button";
-  button.dataset.case = variant.id;
-  button.setAttribute("aria-pressed", "false");
-
-  const letter = document.createElement("span");
-  letter.className = "case-letter";
-  letter.textContent = variant.letter || "A";
-
-  const copy = document.createElement("span");
-  copy.className = "case-copy";
-  const strong = document.createElement("strong");
-  strong.textContent = variant.title;
-  const small = document.createElement("small");
-  small.textContent = `${variant.axisFormula} · ${variant.method.toLowerCase()}`;
-  copy.append(strong, small);
-
-  const value = document.createElement("span");
-  value.className = "case-value";
-  value.textContent = variant.volume.toFixed(2);
-
-  const chevron = document.createElement("span");
-  chevron.className = "case-chevron";
-  chevron.textContent = "›";
-
-  button.append(letter, copy, value, chevron);
-  return button;
-}
-
-function renderCaseList() {
-  const list = $("#caseList");
-  list.replaceChildren(...currentProblem.variants.map(makeCaseButton));
-}
-
-function renderProblemMenu() {
-  const list = $("#problemMenuList");
-  list.replaceChildren();
-  for (const problem of problemRegistry.values()) {
-    const button = document.createElement("button");
-    button.dataset.loadProblem = problem.id;
-    const label = document.createElement("span");
-    label.textContent = problem.title;
-    const detail = document.createElement("kbd");
-    detail.textContent =
-      problem.id === currentProblem.id ? "CURRENT" : `${problem.variants.length}×`;
-    button.append(label, detail);
-    if (problem.id === currentProblem.id) {
-      button.classList.add("is-current");
-    }
-    list.append(button);
-  }
-}
-
-function updateProblemChrome() {
-  $("#brandProject").textContent =
-    currentProblem.id === "custom" ? currentProblem.title : "Parabolic cap";
-  $("#regionEquation").textContent = currentProblem.region.equation;
-  $("#regionDomain").textContent = currentProblem.region.domainLabel;
-  $("#buildProblemBtn").classList.toggle(
-    "is-custom-active",
-    currentProblem.id === "custom",
-  );
-  updateAboutModal();
-}
-
-function updateAboutModal() {
-  $("#aboutTitle").innerHTML = currentProblem.aboutTitle;
-  $("#aboutText").textContent = currentProblem.region.description;
-  const volumes = $("#aboutVolumes");
-  volumes.replaceChildren();
-  volumes.style.gridTemplateColumns = `repeat(${Math.min(
-    3,
-    currentProblem.variants.length,
-  )}, 1fr)`;
-  for (const variant of currentProblem.variants) {
-    const item = document.createElement("div");
-    const label = document.createElement("span");
-    label.textContent = `${variant.letter} · ${variant.axisFormula}`;
-    const value = document.createElement("strong");
-    value.textContent = variant.fraction
-      ? variant.fraction.join(" / ")
-      : `≈ ${variant.volume.toFixed(3)}`;
-    const small = document.createElement("small");
-    small.textContent = variant.fraction
-      ? `≈ ${variant.volume.toFixed(3)}`
-      : variant.methodShort.toLowerCase();
-    item.append(label, value, small);
-    volumes.append(item);
-  }
-}
-
-function disposeCurrentSolids() {
-  for (const solid of Object.values(solidSets)) {
-    scene.remove(solid.group);
-    disposeObject(solid.group);
-  }
-  solidSets = {};
-}
-
-function loadProblem(problem, options = {}) {
-  const { variantId, animateCamera = true, announce = false } = options;
-  stopIntro();
-  setPlaying(false);
-  if (state.approx) setApproxEnabled(false, { silent: true });
-
-  disposeCurrentSolids();
-  currentProblem = problem;
-  currentProblemVariants = new Map(
-    problem.variants.map((variant) => [variant.id, variant]),
-  );
-  state.activeCaseId = null;
-  activeCase = null;
-  activeSolid = null;
-
-  for (const variant of problem.variants) {
-    const solid = createRevolvedSolid(variant);
-    solid.group.visible = false;
-    solidSets[variant.id] = solid;
-    scene.add(solid.group);
-  }
-
-  updateProblemChrome();
-  renderCaseList();
-  renderProblemMenu();
-  selectCase(variantId || problem.variants[0].id, {
-    animateCamera,
-    announce,
-    force: true,
-  });
-}
-
-function selectCase(id, options = {}) {
-  const problem = currentProblemVariants.get(id);
-  if (!problem) return;
-  const { animateCamera = true, announce = true, force = false } = options;
-  if (state.activeCaseId === id && !force) {
-    updateCaseUI(problem);
-    frameCase(id, animateCamera);
+rotationAxis.visible = false;
+rotationAxis.renderOrder = 2;
+scene.add(rotationAxis);
+
+function updateRotationAxisVisual(model) {
+  if (!model?.axis) {
+    rotationAxis.visible = false;
     return;
   }
-
-  if (introAnimation) introAnimation = null;
-  if (state.approx) setApproxEnabled(false, { silent: true });
-  const previousId = state.activeCaseId;
-  state.activeCaseId = id;
-  activeCase = problem;
-
-  if (previousId && solidSets[previousId]) {
-    solidSets[previousId].group.visible = false;
-  }
-
-  activeSolid = solidSets[id];
-  activeSolid.group.visible = true;
-  activeSolid.applyMode(state.mode);
-  activeSolid.updateSweep(state.angle * DEG);
-
-  placeStudio(problem);
-  updateCaseUI(problem);
-  setShadingButtonState(state.mode);
-  updateProblemChrome();
-
-  $("#caseCrumb").classList.add("switching");
-  window.setTimeout(() => $("#caseCrumb").classList.remove("switching"), 420);
-
-  frameCase(id, animateCamera);
-  updateSceneReadout();
-  if (announce) {
-    const where =
-      currentProblem.id === "custom"
-        ? problem.axisFormula
-        : `Study ${problem.letter} · ${problem.axisFormula}`;
-    showToast(currentProblem.id === "custom" ? `Custom solid · ${where}` : where);
-  }
+  const axis = model.axis;
+  const extension = Math.max(
+    12,
+    (model.bounds.xMax - model.bounds.xMin) * 1.35,
+    (model.bounds.yMax - model.bounds.yMin) * 1.7,
+  );
+  const first = axis.pointAt(-extension, 0);
+  const second = axis.pointAt(extension, 0);
+  rotationAxis.geometry.dispose();
+  rotationAxis.geometry = new THREE.BufferGeometry().setFromPoints([
+    new THREE.Vector3(first.x, first.y, 0),
+    new THREE.Vector3(second.x, second.y, 0),
+  ]);
+  rotationAxis.computeLineDistances();
+  rotationAxis.visible = state.view === "3d";
 }
 
-function frameCase(id = state.activeCaseId, animate = true) {
-  if (!id) return;
-  const problem = currentProblemVariants.get(id);
-  if (!problem) return;
-  const { x0 = 0, x1 = 4 } = problem.domain || {};
-  const xMid = (x0 + x1) / 2;
-  const span = x1 - x0;
-  const aspect = Math.max(viewport.clientWidth / viewport.clientHeight, 0.4);
+/* -------------------------------------------------------------------------- */
+/* Camera and render loop                                                     */
+/* -------------------------------------------------------------------------- */
+
+function requestRender() {
+  state.needsRender = true;
+  if (state.animationFrame) return;
+  state.animationFrame = requestAnimationFrame(tick);
+}
+
+function cancelCameraTween() {
+  state.cameraTween = null;
+}
+
+function tweenCamera(position, target, duration = 880) {
+  if (reducedMotion) {
+    camera.position.copy(position);
+    controls.target.copy(target);
+    camera.lookAt(target);
+    requestRender();
+    return;
+  }
+  state.cameraTween = {
+    start: performance.now(),
+    duration,
+    fromPosition: camera.position.clone(),
+    toPosition: position.clone(),
+    fromTarget: controls.target.clone(),
+    toTarget: target.clone(),
+  };
+  requestRender();
+}
+
+function frameSolid(options = {}) {
+  const { animate = true, fromHigh = false } = options;
+  if (!state.solid) return;
+  state.solid.group.updateMatrixWorld(true);
+  const box = new THREE.Box3().setFromObject(state.solid.group);
+  if (box.isEmpty()) return;
+  const sphere = box.getBoundingSphere(new THREE.Sphere());
+  const target = sphere.center.clone();
+  const radius = Math.max(sphere.radius, 0.8);
+  const aspect = Math.max(viewport.clientWidth / viewport.clientHeight, 0.35);
   const vFov = camera.fov * DEG;
   const hFov = 2 * Math.atan(Math.tan(vFov / 2) * aspect);
   const fitFov = Math.min(vFov, hFov);
-  const sphereRadius =
-    Math.hypot(span * 0.59 + 0.35, problem.maxRadius) * 1.035;
-  const fitScale = aspect < 0.8 ? 0.8 : 1.08;
-  const distance = (sphereRadius / Math.sin(fitFov / 2)) * fitScale;
-  const target = new THREE.Vector3(xMid, problem.axisValue, 0);
-  const direction = new THREE.Vector3(0.62, 0.41, 1.05).normalize();
+  const distance = (radius / Math.sin(fitFov / 2)) * 1.12;
+  const direction = new THREE.Vector3(0.72, 0.36, 1.02).normalize();
   const position = target.clone().addScaledVector(direction, distance);
 
-  if (animate && !reducedMotion) {
-    cameraTween = {
-      start: performance.now(),
-      duration: 760,
-      fromPosition: camera.position.clone(),
-      toPosition: position,
-      fromTarget: controls.target.clone(),
-      toTarget: target,
-    };
+  if (fromHigh) {
+    camera.position.set(
+      target.x - radius * 0.4,
+      target.y + distance * 0.92,
+      target.z + distance * 0.9,
+    );
+    controls.target.copy(target);
+    camera.lookAt(target);
+  }
+
+  if (animate) {
+    tweenCamera(position, target, 960);
   } else {
-    cameraTween = null;
+    cancelCameraTween();
     camera.position.copy(position);
     controls.target.copy(target);
     camera.lookAt(target);
     controls.update();
+    requestRender();
   }
 }
 
-function updateSceneReadout() {
-  if (!activeCase) return;
-  const modeLabel =
-    state.mode === "xray" ? "x-ray" : state.mode === "wire" ? "wire" : "solid";
-  const studyLabel =
-    currentProblem.id === "custom"
-      ? "Custom"
-      : `Study ${activeCase.letter}`;
-  $("#topbarScene").textContent = state.approx
-    ? `${studyLabel} · washers`
-    : `${studyLabel} · ${modeLabel}`;
-  $("#statusMessage").textContent = state.approx
-    ? `Riemann washer stack · n = ${state.slices} · ${state.angle.toFixed(0)}°`
-    : state.angle >= 359.5
-      ? `Full solid · ${activeCase.method.toLowerCase()} · 360°`
-      : state.angle <= 0.5
-        ? "Profile view · the generating region"
-        : `Revolving region · ${state.angle.toFixed(0)}°`;
-  $("#triangleCount").textContent = `${numberFormat.format(countTriangles())} tris`;
+function updateCameraTween(now) {
+  const tween = state.cameraTween;
+  if (!tween) return false;
+  const progress = clamp((now - tween.start) / tween.duration, 0, 1);
+  const eased =
+    progress < 0.5
+      ? 4 * progress * progress * progress
+      : 1 - Math.pow(-2 * progress + 2, 3) / 2;
+  camera.position.lerpVectors(tween.fromPosition, tween.toPosition, eased);
+  controls.target.lerpVectors(tween.fromTarget, tween.toTarget, eased);
+  controls.update();
+  if (progress >= 1) {
+    state.cameraTween = null;
+    if (state.playAfterCamera && state.view === "3d" && state.solid) {
+      state.playAfterCamera = false;
+      setPlaying(true);
+    }
+  }
+  return true;
 }
 
-function countTriangles() {
-  let total = 0;
-  if (activeSolid) {
-    activeSolid.group.traverse((object) => {
-      if (!object.isMesh) return;
-      let parent = object;
-      while (parent) {
-        if (!parent.visible) return;
-        parent = parent.parent;
-      }
-      const geometry = object.geometry;
-      if (!geometry) return;
-      let count = geometry.index
-        ? geometry.index.count
-        : geometry.attributes.position?.count || 0;
-      const drawRange = geometry.drawRange;
-      if (drawRange && drawRange.count !== Infinity) {
-        count = Math.min(count, drawRange.count);
-      }
-      total += Math.max(0, Math.floor(count / 3));
-    });
+function updateFps(now) {
+  if (now - state.fpsWindowStart < 650) return;
+  const seconds = (now - state.fpsWindowStart) / 1000;
+  const readout = $("#fpsReadout");
+  if (state.fpsFrames === 0) {
+    readout.textContent = "IDLE";
+  } else {
+    readout.textContent = `${Math.round(state.fpsFrames / seconds)} FPS`;
   }
-  if (washerGroup) {
-    washerGroup.traverse((object) => {
-      if (!object.isMesh && !object.isLineSegments) return;
-      const geometry = object.geometry;
-      if (!geometry) return;
-      const count = geometry.index
-        ? geometry.index.count
-        : geometry.attributes.position?.count || 0;
-      total += Math.max(0, Math.floor(count / 3));
-    });
+  state.fpsFrames = 0;
+  state.fpsWindowStart = now;
+}
+
+function tick(now) {
+  state.animationFrame = 0;
+  const dt = Math.min((now - state.lastTime) / 1000, 0.05);
+  state.lastTime = now;
+
+  let active = false;
+  if (updateCameraTween(now)) active = true;
+
+  if (state.playing && state.view === "3d") {
+    const next = state.sweep + dt * 145;
+    setSweep(next, { ui: true, quiet: true });
+    if (next >= 360) {
+      setSweep(360, { ui: true, quiet: true });
+      setPlaying(false);
+    }
+    active = true;
   }
-  return total;
+
+  updateGizmo();
+
+  if (state.needsRender || active) {
+    renderer.render(scene, camera);
+    state.needsRender = false;
+    state.fpsFrames += 1;
+  }
+  updateFps(now);
+
+  if (!active && !state.needsRender) {
+    window.clearTimeout(state.idleTimer);
+    state.idleTimer = window.setTimeout(() => {
+      if (!state.animationFrame && !state.playing && !state.cameraTween) {
+        $("#fpsReadout").textContent = "IDLE";
+      }
+    }, 900);
+  }
+
+  if (now - state.lastTriangleUpdate > 900) {
+    state.lastTriangleUpdate = now;
+    updateTriangleCount();
+  }
+
+  if (active) requestRender();
 }
 
 /* -------------------------------------------------------------------------- */
-/* Angle / revolve state                                                      */
+/* Editor                                                                     */
 /* -------------------------------------------------------------------------- */
 
-function setAngle(degrees, options = {}) {
-  const { animateUI = true } = options;
-  const next = clamp(degrees, 0, 360);
+function escapeHtml(value) {
+  return String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
 
-  if (state.approx && next < 359.5) {
-    setApproxEnabled(false, { silent: true });
-    showToast("Washers hidden · a full revolution is required");
+function prettyMathHTML(value) {
+  let text = escapeHtml(prettyExpression(value));
+  text = text
+    .replace(/\^(\-?\d+)/g, "<sup>$1</sup>")
+    .replace(/sqrt\s*\(/g, "√(")
+    .replace(/\bpi\b/g, "π")
+    .replace(/\btau\b/g, "τ")
+    .replace(/\*/g, " · ");
+  return text;
+}
+
+function lineColor(index) {
+  return COLORS[index % COLORS.length];
+}
+
+function nextLineColor() {
+  const used = new Set(state.lines.map((line) => line.color));
+  return COLORS.find((color) => !used.has(color)) || lineColor(state.lines.length);
+}
+
+function buildLineRows() {
+  const list = $("#lineList");
+  list.replaceChildren();
+
+  state.lines.forEach((line, index) => {
+    const row = document.createElement("div");
+    row.className = "line-row";
+    row.dataset.lineId = line.id;
+    if (state.lineErrorId === line.id) row.classList.add("has-error");
+    if (state.newLineId === line.id) row.classList.add("is-new");
+
+    const swatch = document.createElement("span");
+    swatch.className = "line-swatch";
+    swatch.style.background = line.color;
+    swatch.style.boxShadow = `0 0 0 3px ${hexToRgba(line.color, 0.09)}`;
+
+    const prefix = document.createElement("span");
+    prefix.className = "line-prefix";
+    prefix.textContent = "y=";
+
+    const input = document.createElement("input");
+    input.className = "expression-input line-input";
+    input.type = "text";
+    input.value = line.text;
+    input.spellcheck = false;
+    input.autocomplete = "off";
+    input.autocapitalize = "off";
+    input.setAttribute("aria-label", `Function line ${index + 1}`);
+    input.placeholder =
+      index === 0 ? "-x^2 + 4x" : index === 1 ? "0" : "sin(x) {0 <= x <= pi}";
+    input.addEventListener("input", (event) => {
+      updateLineText(line.id, event.target.value);
+    });
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        generateSolid();
+      }
+    });
+
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "line-remove";
+    remove.textContent = "×";
+    remove.title = "Remove line";
+    remove.setAttribute("aria-label", `Remove function line ${index + 1}`);
+    remove.disabled = state.lines.length <= 1;
+    if (remove.disabled) remove.style.opacity = "0.12";
+    remove.addEventListener("click", () => removeLine(line.id));
+
+    row.append(swatch, prefix, input, remove);
+
+    const error = document.createElement("div");
+    error.className = "line-error";
+    error.hidden = true;
+    row.append(error);
+    list.append(row);
+  });
+}
+
+function updateLineErrorMessages() {
+  for (const row of $$(".line-row")) {
+    const id = row.dataset.lineId;
+    const error = $(".line-error", row);
+    const hasError = state.lineErrorId === id;
+    row.classList.toggle("has-error", hasError);
+    error.hidden = !hasError;
+    error.textContent = hasError ? state.model?.error || "Check this line." : "";
+  }
+}
+
+function updateLineText(id, text) {
+  const line = state.lines.find((entry) => entry.id === id);
+  if (!line) return;
+  line.text = text;
+  switchToGraphIfNeeded();
+  scheduleAnalyze();
+}
+
+function addLine() {
+  const id = `line-${++state.lineSequence}`;
+  state.lines.push({
+    id,
+    text: "",
+    color: nextLineColor(),
+  });
+  state.newLineId = id;
+  buildLineRows();
+  const input = $(`.line-row[data-line-id="${id}"] .line-input`);
+  input?.focus();
+  window.setTimeout(() => {
+    state.newLineId = null;
+    $(`.line-row[data-line-id="${id}"]`)?.classList.remove("is-new");
+  }, 900);
+  switchToGraphIfNeeded();
+  scheduleAnalyze();
+}
+
+function removeLine(id) {
+  if (state.lines.length <= 1) return;
+  state.lines = state.lines.filter((line) => line.id !== id);
+  buildLineRows();
+  switchToGraphIfNeeded();
+  scheduleAnalyze();
+}
+
+function switchToGraphIfNeeded() {
+  state.stale = true;
+  if (state.view === "3d") {
+    setView("2d", { stopPlayback: true });
+  }
+}
+
+$("#addLineBtn").addEventListener("click", addLine);
+
+$("#axisInput").addEventListener("input", (event) => {
+  state.axisText = event.target.value;
+  switchToGraphIfNeeded();
+  scheduleAnalyze();
+});
+
+$("#axisInput").addEventListener("keydown", (event) => {
+  if (event.key === "Enter") {
+    event.preventDefault();
+    generateSolid();
+  }
+});
+
+$$("[data-axis-example]").forEach((button) => {
+  button.addEventListener("click", () => {
+    const axis = button.dataset.axisExample;
+    state.axisText = axis;
+    $("#axisInput").value = axis;
+    switchToGraphIfNeeded();
+    analyzeNow({ fit: true });
+  });
+});
+
+function scheduleAnalyze() {
+  window.clearTimeout(state.analyzeTimer);
+  state.analyzeTimer = window.setTimeout(() => analyzeNow({ fit: true }), 90);
+}
+
+function analyzeNow(options = {}) {
+  const { fit = false } = options;
+  const model = analyzeLines(state.lines, state.axisText);
+  state.model = model;
+  state.lineErrorId = model.lineId || null;
+
+  if (!plot.userAdjusted) plot.autoFit = true;
+  plot.setModel(model);
+  if (fit && model.ok && !plot.userAdjusted) {
+    plot.fit();
   }
 
-  state.angle = next;
-  if (activeSolid) activeSolid.updateSweep(next * DEG);
+  updateEditorError();
+  updateLineErrorMessages();
+  updateResults();
+  updateChrome();
+  updateRotationAxisVisual(model);
 
-  if (animateUI) {
-    $("#angleReadout").textContent = next.toFixed(0);
-    $("#angleRange").value = next.toFixed(1);
-    $("#angleRange").style.setProperty("--angle-pct", `${(next / 360) * 100}%`);
+  const generateButton = $("#generateBtn");
+  generateButton.disabled = !model.ok;
+  $("#generateLabel").textContent = state.solid ? "Update solid" : "Generate solid";
+
+  $("#graphEmpty").hidden = model.ok;
+  if (!model.ok) {
+    $("#graphEmpty").innerHTML = "";
+    const title = document.createElement("strong");
+    title.textContent = "Check the expressions";
+    const detail = document.createElement("span");
+    detail.textContent = model.error || "Add a region to continue.";
+    $("#graphEmpty").append(title, detail);
+  }
+
+  return model;
+}
+
+function updateEditorError() {
+  const error = $("#editorError");
+  const model = state.model;
+  if (model?.ok || !model) {
+    error.hidden = true;
+    error.textContent = "";
+    return;
+  }
+  error.hidden = false;
+  error.textContent = model.error;
+}
+
+function updateChrome() {
+  const model = state.model;
+  const axisLabel = model?.axis?.label || "—";
+  const firstLine = state.lines.find((line) => line.text.trim());
+  $("#brandProject").textContent = firstLine
+    ? truncate(prettyExpression(firstLine.text), 24)
+    : "Untitled region";
+  $("#topbarScene").textContent =
+    state.view === "3d"
+      ? `Local math · 3D solid${state.stale ? " · update" : ""}`
+      : "Local math · 2D graph";
+  $("#axisChipLabel").textContent = axisLabel;
+  $("#graphAxisChip").textContent = `ROTATION · ${axisLabel}`;
+
+  if (model?.ok) {
+    const firstCell = model.cells[0];
+    const equation = `${prettyExpression(firstCell.lowerLine.source)} ≤ y ≤ ${prettyExpression(
+      firstCell.upperLine.source,
+    )}`;
+    $("#sceneEquation").textContent = equation;
+    $("#objectName").textContent = `About ${axisLabel}`;
+    $("#objectMethod").textContent = model.method;
+    $("#caseCrumb").textContent = "REGION";
+    $("#sceneDot").style.background =
+      state.mode === "xray" ? "#6e9fff" : state.mode === "wire" ? "#c5a3ff" : "#ff9950";
+    $("#statusMessage").textContent =
+      state.view === "3d"
+        ? `Solid · ${model.method.toLowerCase()} · ${Math.round(state.sweep)}°`
+        : "2D graph · drag to pan · scroll to zoom";
+    document.title = `Revolve Lab — ${model.method}`;
+  } else {
+    $("#sceneEquation").textContent = "—";
+    $("#objectName").textContent = "Unresolved region";
+    $("#objectMethod").textContent = "Add an enclosed region";
+    document.title = "Revolve Lab — Solids of Revolution";
+    $("#statusMessage").textContent = "2D graph · adjust the expressions";
+  }
+}
+
+function truncate(text, length) {
+  const value = String(text);
+  return value.length > length ? `${value.slice(0, length - 1)}…` : value;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Results and formulas                                                       */
+/* -------------------------------------------------------------------------- */
+
+function updateResults() {
+  const model = state.model;
+  const results = $("#results");
+  if (!model?.ok) {
+    results.hidden = true;
+    return;
+  }
+  results.hidden = false;
+
+  const exact = model.exact;
+  const card = $(".volume-card");
+  card.classList.toggle("is-numeric", !exact);
+  $("#volumeEyebrow").textContent = exact ? "EXACT VOLUME" : "NUMERICAL VOLUME";
+  $("#methodBadge").textContent = model.method.toUpperCase();
+
+  if (exact) {
+    $("#volumeNumerator").textContent =
+      exact.denominator === 1
+        ? `${exact.numerator}π`
+        : Math.abs(exact.numerator) === 1
+          ? `${exact.numerator < 0 ? "−" : ""}π`
+          : `${exact.numerator}π`;
+    $("#volumeDenominator").textContent = String(exact.denominator);
+    $("#volumeFraction").classList.toggle("is-integer", exact.denominator === 1);
+  }
+  $("#volumeDecimal").textContent = model.volume.toFixed(3);
+  $("#volumeCaption").textContent = model.formula.note;
+  $("#methodMini").textContent =
+    model.method === "Disk method"
+      ? "DISK"
+      : model.method === "Washer method"
+        ? "WASHER"
+        : "SLICES";
+  $("#formulaBlock").innerHTML = buildFormulaHTML(model);
+  $("#formulaResult").innerHTML = buildResultHTML(model);
+  $("#formulaNote").textContent = model.axis.isHorizontal
+    ? `${model.formula.note} All radii are measured from ${model.axis.label}.`
+    : `${model.formula.note} u is measured along ${model.axis.label}; R and r are perpendicular distances.`;
+  $("#regionReadout").textContent = describeRegion(model);
+}
+
+function describeRegion(model) {
+  const parts = model.cells.slice(0, 3).map((cell) => {
+    return `${formatBound(cell.a)} ≤ x ≤ ${formatBound(cell.b)} · ${prettyExpression(
+      cell.lowerLine.source,
+    )} ≤ y ≤ ${prettyExpression(cell.upperLine.source)}`;
+  });
+  if (model.cells.length > 3) parts.push("…");
+  return parts.join("   ·   ");
+}
+
+function buildIntegralHTML(term, model, index) {
+  const oblique = model.formula.kind === "oblique";
+  const lower = oblique ? formatBound(term.uStart, 3) : formatBound(term.a);
+  const upper = oblique ? formatBound(term.uEnd, 3) : formatBound(term.b);
+  const differential = oblique ? "du" : "dx";
+  const variable = oblique ? "u" : "x";
+  const outerSource = prettyMathHTML(term.outerText);
+  const innerSource = prettyMathHTML(term.innerText);
+  const isDisk = term.innerText === "0";
+  const compact =
+    oblique ||
+    model.formula.terms.length > 1 ||
+    outerSource.length + innerSource.length > 32;
+  const outer = compact ? `R(${variable})` : outerSource;
+  const inner = compact ? `r(${variable})` : innerSource;
+
+  const prefix =
+    index === 0
+      ? `<span>V</span><span class="formula-eq">=</span>`
+      : `<span class="formula-eq">+</span>`;
+  const pi = `<span>π</span>`;
+  const integral = `<span class="formula-int"><span class="formula-int-symbol">∫</span><span class="formula-limits"><sup>${upper}</sup><sub>${lower}</sub></span></span>`;
+  const outerPower = `<span class="formula-power"><span class="formula-bracket">[</span><span>${outer}</span><span class="formula-bracket">]</span><sup>2</sup></span>`;
+  const innerPower = isDisk
+    ? ""
+    : `<span class="formula-eq">−</span><span class="formula-power"><span class="formula-bracket">[</span><span>${inner}</span><span class="formula-bracket">]</span><sup>2</sup></span>`;
+
+  const radii = oblique
+    ? ""
+    : `<div class="formula-row formula-radii"><span class="formula-eq">R(${variable})</span><span>=</span><span>${outerSource}</span></div>${
+        isDisk
+          ? ""
+          : `<div class="formula-row formula-radii"><span class="formula-eq">r(${variable})</span><span>=</span><span>${innerSource}</span></div>`
+      }`;
+
+  return `<div class="formula-row">${prefix}${pi}${integral}${outerPower}${innerPower}<span>${differential}</span></div>${radii}`;
+}
+
+function buildFormulaHTML(model) {
+  const terms = model.formula.terms.slice(0, 3);
+  const rows = terms.map((term, index) => buildIntegralHTML(term, model, index));
+  if (model.formula.terms.length > 3) {
+    rows.push('<div class="formula-row formula-eq">+ …</div>');
+  }
+  return rows.join("");
+}
+
+function buildResultHTML(model) {
+  if (model.exact) {
+    return `= ${escapeHtml(model.exact.label)}<span class="formula-approx">≈ ${model.volume.toFixed(
+      3,
+    )} u³</span>`;
+  }
+  return `≈ ${model.volume.toFixed(4)} u³`;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Generate and view switching                                                */
+/* -------------------------------------------------------------------------- */
+
+function generateSolid() {
+  window.clearTimeout(state.analyzeTimer);
+  const model = analyzeNow({ fit: true });
+  if (!model.ok) {
+    showToast("Fix the region before generating a solid");
+    return;
+  }
+
+  // Build the replacement before touching the old mesh. If something goes
+  // wrong, the currently displayed solid survives.
+  let newSolid;
+  try {
+    newSolid = createRevolvedSolid(model);
+  } catch (error) {
+    showToast(`Could not build the solid: ${error.message}`);
+    return;
+  }
+  newSolid.applyMode(state.mode);
+  scene.add(newSolid.group);
+  newSolid.group.updateMatrixWorld(true);
+
+  const previousSolid = state.solid;
+  state.solid = newSolid;
+  if (previousSolid) {
+    scene.remove(previousSolid.group);
+    disposeRevolvedSolid(previousSolid);
+  }
+
+  state.stale = false;
+  $("#generateLabel").textContent = "Update solid";
+  const first3d = state.view !== "3d";
+  setView("3d", { stopPlayback: true, frame: false });
+  setSweep(reducedMotion ? 360 : 0, { ui: true, quiet: true });
+  state.solid.updateSweep(state.sweep * DEG);
+  state.playAfterCamera = !reducedMotion;
+  frameSolid({ animate: !reducedMotion, fromHigh: first3d });
+  if (reducedMotion) {
+    setSweep(360, { ui: true, quiet: true });
+    state.solid.updateSweep(TAU);
+  }
+  updateRotationAxisVisual(model);
+  updateChrome();
+  updateTriangleCount();
+  requestRender();
+  if (window.innerWidth <= 980) $("#editorPanel").classList.remove("open");
+}
+
+function setView(view, options = {}) {
+  const { stopPlayback = true, frame = true } = options;
+  if (view === state.view) {
+    if (view === "3d" && state.solid && frame) frameSolid({ animate: true });
+    return;
+  }
+
+  state.view = view;
+  appShell.classList.toggle("is-3d", view === "3d");
+  $$(".view-tab").forEach((button) => {
+    const active = button.dataset.view === view;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-pressed", String(active));
+  });
+  $("#statusHint").textContent =
+    view === "3d"
+      ? "LMB orbit · RMB pan · scroll zoom"
+      : "LMB pan · scroll zoom";
+  updateRotationAxisVisual(state.model);
+
+  if (view === "2d") {
+    state.playAfterCamera = false;
+    if (stopPlayback) setPlaying(false);
+    plot.resize();
+    plot.requestRender();
+    requestRender();
+  } else {
+    if (!state.solid || state.stale) {
+      generateSolid();
+      return;
+    }
+    if (frame) frameSolid({ animate: true });
+    requestRender();
+  }
+  updateChrome();
+}
+
+$$(".view-tab").forEach((button) => {
+  button.addEventListener("click", () => {
+    const view = button.dataset.view;
+    if (view === "3d" && (!state.solid || state.stale)) {
+      generateSolid();
+      return;
+    }
+    setView(view);
+  });
+});
+
+$("#backToGraphBtn").addEventListener("click", () => setView("2d"));
+$("#generateBtn").addEventListener("click", generateSolid);
+
+$("#fitGraphBtn").addEventListener("click", () => {
+  plot.autoFit = true;
+  plot.fit({ userAction: false });
+});
+
+$("#resetViewBtn").addEventListener("click", () => {
+  frameSolid({ animate: true });
+  showToast("Framed the solid");
+});
+
+$("#gridBtn").addEventListener("click", () => {
+  state.grid = !state.grid;
+  grid.visible = state.grid;
+  $("#gridBtn").classList.toggle("active", state.grid);
+  requestRender();
+  showToast(state.grid ? "Grid shown" : "Grid hidden");
+});
+
+$$(".shading-button").forEach((button) => {
+  button.addEventListener("click", () => {
+    const mode = button.dataset.shading;
+    if (!["solid", "xray", "wire"].includes(mode)) return;
+    state.mode = mode;
+    $$(".shading-button").forEach((entry) => {
+      entry.classList.toggle("active", entry.dataset.shading === mode);
+    });
+    state.solid?.applyMode(mode);
+    updateChrome();
+    requestRender();
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* Timeline                                                                   */
+/* -------------------------------------------------------------------------- */
+
+function setSweep(degrees, options = {}) {
+  const { ui = true, quiet = false } = options;
+  state.sweep = clamp(degrees, 0, 360);
+  state.solid?.updateSweep(state.sweep * DEG);
+  if (ui) {
+    $("#angleReadout").textContent = Math.round(state.sweep);
+    $("#angleRange").value = state.sweep.toFixed(1);
+    $("#angleRange").style.setProperty(
+      "--angle-pct",
+      `${(state.sweep / 360) * 100}%`,
+    );
     $$("[data-angle]").forEach((button) => {
       button.classList.toggle(
         "active",
-        Math.abs(Number(button.dataset.angle) - next) < 0.6,
+        Math.abs(Number(button.dataset.angle) - state.sweep) < 0.6,
       );
     });
-    updateStatusMessage();
-    updateSceneReadout();
+    if (state.view === "3d" && state.model?.ok) {
+      $("#statusMessage").textContent = `Solid · ${state.model.method.toLowerCase()} · ${Math.round(
+        state.sweep,
+      )}°`;
+    }
+    if (!quiet) {
+      updateChrome();
+      updateTriangleCount();
+    }
   }
-}
-
-function updateStatusMessage() {
-  if (!activeCase) return;
-  if (state.approx) {
-    $("#statusMessage").textContent = `Riemann washer stack · n = ${state.slices}`;
-  } else if (state.angle >= 359.5) {
-    $("#statusMessage").textContent = `Full solid · ${activeCase.method.toLowerCase()} · 360°`;
-  } else if (state.angle <= 0.5) {
-    $("#statusMessage").textContent = "Profile view · the generating region";
-  } else {
-    $("#statusMessage").textContent = `Revolving region · ${state.angle.toFixed(0)}°`;
-  }
+  requestRender();
 }
 
 function setPlaying(playing) {
   if (playing) {
-    if (introAnimation) introAnimation = null;
-    if (state.approx) {
-      setApproxEnabled(false, { silent: true });
-      showToast("Washers hidden · playing the revolve");
-    }
-    if (state.angle >= 359.5) setAngle(0);
+    if (state.view !== "3d") return;
+    if (state.sweep >= 359.5) setSweep(0, { ui: true, quiet: true });
+    $("#timelineDock").classList.add("playing");
+  } else {
+    $("#timelineDock").classList.remove("playing");
   }
   state.playing = playing;
-  $("#timelineDock").classList.toggle("playing", playing);
-  $("#playBtn").setAttribute(
-    "aria-label",
-    playing ? "Pause revolve" : "Play revolve",
-  );
-}
-
-function stopIntro() {
-  if (introAnimation) introAnimation = null;
-}
-
-/* -------------------------------------------------------------------------- */
-/* Approximation                                                              */
-/* -------------------------------------------------------------------------- */
-
-function updateApproxUI() {
-  if (!activeCase) return;
-  const n = state.slices;
-  const estimate = approximateVolume(activeCase, n);
-  const delta = estimate - activeCase.volume;
-  const percent = Math.abs((delta / activeCase.volume) * 100);
-  const direction = delta < 0 ? "below" : "above";
-
-  $("#nValue").textContent = String(n);
-  $("#nValue").style.fontVariantNumeric = "tabular-nums";
-  $("#approxValue").textContent = `${estimate.toFixed(2)} u³`;
-  $("#errorText").textContent = `${percent < 0.001 ? percent.toFixed(4) : percent.toFixed(3)}% ${direction} exact`;
-  $("#errorFill").style.width = `${clamp(Math.sqrt(percent / 5) * 100, 2, 100)}%`;
-  $("#nRange").style.setProperty(
-    "--n-pct",
-    `${((n - Number($("#nRange").min)) /
-      (Number($("#nRange").max) - Number($("#nRange").min))) *
-      100}%`,
-  );
-  $("#approxNote").textContent = state.approx
-    ? "Midpoint sample shown at 360°. Drag the timeline to return to the solid."
-    : "Enable to inspect the washer stack. The study snaps to a full revolution.";
-  $("#approxBody").classList.toggle("is-active", state.approx);
-  $("#approxToggle").checked = state.approx;
-}
-
-function disposeObject(root) {
-  if (!root) return;
-  const materials = new Set();
-  root.traverse((object) => {
-    if (object.geometry) object.geometry.dispose();
-    if (Array.isArray(object.material)) {
-      object.material.forEach((material) => materials.add(material));
-    } else if (object.material) {
-      materials.add(object.material);
-    }
-  });
-  materials.forEach((material) => material.dispose());
-}
-
-function removeWashers() {
-  window.clearTimeout(washerTimer);
-  if (washerGroup) {
-    scene.remove(washerGroup);
-    disposeObject(washerGroup);
-    washerGroup = null;
-  }
-}
-
-function buildWashers() {
-  if (!activeCase) return;
-  removeWashers();
-  washerGroup = createWashers(activeCase, state.slices);
-  washerGroup.visible = true;
-  scene.add(washerGroup);
-  $("#triangleCount").textContent = `${numberFormat.format(countTriangles())} tris`;
-}
-
-function setApproxEnabled(enabled, options = {}) {
-  const { silent = false } = options;
-  if (enabled === state.approx) {
-    updateApproxUI();
-    return;
-  }
-
-  if (enabled) {
-    setPlaying(false);
-    if (introAnimation) introAnimation = null;
-    if (state.angle < 359.5) setAngle(360, { animateUI: true });
-    state.approx = true;
-    activeSolid.applyMode("ghost");
-    buildWashers();
-    if (!silent) showToast(`Washer approximation · n = ${state.slices}`);
+  if (playing) {
+    requestRender();
   } else {
-    state.approx = false;
-    removeWashers();
-    if (activeSolid) activeSolid.applyMode(state.mode);
-    if (!silent) showToast("Returned to the solid");
-  }
-
-  updateApproxUI();
-  updateSceneReadout();
-  $("#washerQuickBtn").classList.toggle("active", state.approx);
-}
-
-/* -------------------------------------------------------------------------- */
-/* Display modes, tools, grid, and UI                                         */
-/* -------------------------------------------------------------------------- */
-
-function setShading(mode, options = {}) {
-  const { silent = false } = options;
-  if (!["solid", "xray", "wire"].includes(mode)) return;
-  if (state.approx) setApproxEnabled(false, { silent: true });
-  state.mode = mode;
-  if (activeSolid) activeSolid.applyMode(mode);
-  setShadingButtonState(mode);
-  updateSceneReadout();
-
-  if (!silent) {
-    const label =
-      mode === "xray" ? "X-ray shading" : mode === "wire" ? "Wireframe" : "Material preview";
-    showToast(label);
+    updateTriangleCount();
   }
 }
 
-function setShadingButtonState(mode) {
-  $$(".shading-button").forEach((button) => {
-    button.classList.toggle("active", button.dataset.shading === mode);
-  });
-  $("#railWire").classList.toggle("active", mode === "wire");
-}
-
-function setTool(tool) {
-  state.tool = tool;
-  const mapping = {
-    orbit: THREE.MOUSE.ROTATE,
-    pan: THREE.MOUSE.PAN,
-    zoom: THREE.MOUSE.DOLLY,
-  };
-  controls.mouseButtons.LEFT = mapping[tool] || THREE.MOUSE.ROTATE;
-  $$(".rail-button[data-tool]").forEach((button) => {
-    button.classList.toggle("active", button.dataset.tool === tool);
-  });
-  viewport.classList.toggle("tool-pan", tool === "pan");
-  viewport.classList.toggle("tool-zoom", tool === "zoom");
-}
-
-function toggleGrid(force) {
-  state.grid = typeof force === "boolean" ? force : !state.grid;
-  floorGroup.visible = state.grid;
-  $("#railGrid").classList.toggle("active", state.grid);
-  showToast(state.grid ? "Grid and floor shown" : "Grid and floor hidden");
-}
-
-function togglePlay() {
-  if (state.playing) {
-    setPlaying(false);
-  } else {
-    setPlaying(true);
-  }
-}
-
-function showToast(message, duration = 1900) {
-  const toast = $("#toast");
-  toast.textContent = message;
-  toast.classList.add("show");
-  window.clearTimeout(toastTimer);
-  toastTimer = window.setTimeout(() => toast.classList.remove("show"), duration);
-}
-
-function resetStudy() {
-  stopIntro();
-  setPlaying(false);
-  setApproxEnabled(false, { silent: true });
-  setShading("solid", { silent: true });
-  state.slices = 24;
-  $("#nRange").value = "24";
-  if (!state.grid) toggleGrid(true);
-  loadProblem(PRESET_PROBLEM, {
-    variantId: "a",
-    animateCamera: true,
-  });
-  setAngle(360);
-  setTool("orbit");
-  updateApproxUI();
-  showToast("Study reset");
-}
-
-/* -------------------------------------------------------------------------- */
-/* Washer count                                                               */
-/* -------------------------------------------------------------------------- */
-
-$("#nRange").addEventListener("input", (event) => {
-  state.slices = Number(event.target.value);
-  updateApproxUI();
-  updateSceneReadout();
-  if (state.approx) {
-    window.clearTimeout(washerTimer);
-    washerTimer = window.setTimeout(() => {
-      if (state.approx) buildWashers();
-    }, 70);
-  }
-});
-
-$("#approxToggle").addEventListener("change", (event) => {
-  setApproxEnabled(event.target.checked);
-});
-
-/* -------------------------------------------------------------------------- */
-/* Timeline controls                                                          */
-/* -------------------------------------------------------------------------- */
-
-$("#playBtn").addEventListener("click", () => {
-  stopIntro();
-  togglePlay();
-});
-
+$("#playBtn").addEventListener("click", () => setPlaying(!state.playing));
 $("#toStartBtn").addEventListener("click", () => {
-  stopIntro();
   setPlaying(false);
-  setAngle(0);
+  setSweep(0);
 });
-
 $("#toEndBtn").addEventListener("click", () => {
-  stopIntro();
   setPlaying(false);
-  setAngle(360);
+  setSweep(360);
 });
-
-$("#angleRange").addEventListener("pointerdown", () => {
-  stopIntro();
-  setPlaying(false);
-});
-
+$("#angleRange").addEventListener("pointerdown", () => setPlaying(false));
 $("#angleRange").addEventListener("input", (event) => {
-  setAngle(Number(event.target.value));
+  setPlaying(false);
+  setSweep(Number(event.target.value));
 });
-
 $$("[data-angle]").forEach((button) => {
   button.addEventListener("click", () => {
-    const angle = Number(button.dataset.angle);
-    stopIntro();
     setPlaying(false);
-    setAngle(angle);
-    if (Number.isFinite(angle)) {
-      showToast(
-        angle === 0
-          ? "Source region"
-          : angle === 360
-            ? "Full revolution · 360°"
-            : `${angle}° cutaway`,
-      );
-    }
+    setSweep(Number(button.dataset.angle));
   });
 });
 
 /* -------------------------------------------------------------------------- */
-/* Case selection and shading                                                */
+/* Gizmo                                                                      */
 /* -------------------------------------------------------------------------- */
 
-$("#caseList").addEventListener("click", (event) => {
-  const button = event.target.closest(".case-button[data-case]");
-  if (!button) return;
-  selectCase(button.dataset.case);
-  closeMenus();
-  if (window.innerWidth <= 900) {
-    $("#propertiesPanel").classList.remove("open");
-  }
-});
+const gizmoItems = [
+  { group: $("#gizmoX"), vector: new THREE.Vector3(1, 0, 0) },
+  { group: $("#gizmoY"), vector: new THREE.Vector3(0, 1, 0) },
+  { group: $("#gizmoZ"), vector: new THREE.Vector3(0, 0, 1) },
+];
 
-$("#problemMenuList").addEventListener("click", (event) => {
-  const button = event.target.closest("[data-load-problem]");
-  if (!button) return;
-  const problem = problemRegistry.get(button.dataset.loadProblem);
-  if (!problem) return;
-  loadProblem(problem, { animateCamera: true });
-  closeMenus();
-});
-
-$("#buildProblemBtn").addEventListener("click", () => openBuilder());
-
-$$(".shading-button").forEach((button) => {
-  button.addEventListener("click", () => {
-    stopIntro();
-    setShading(button.dataset.shading);
-  });
-});
-
-$$(".rail-button[data-tool]").forEach((button) => {
-  button.addEventListener("click", () => {
-    setTool(button.dataset.tool);
-    if (button.dataset.tool === "pan") showToast("Pan tool · drag to move");
-    if (button.dataset.tool === "zoom") showToast("Zoom tool · drag vertically");
-    if (button.dataset.tool === "orbit") showToast("Orbit tool · drag to rotate");
-  });
-});
-
-$("#frameBtn").addEventListener("click", () => {
-  stopIntro();
-  frameCase(state.activeCaseId, true);
-  showToast("Framed selected solid");
-});
-
-$("#resetViewBtn").addEventListener("click", () => {
-  stopIntro();
-  frameCase(state.activeCaseId, true);
-  showToast("View reset");
-});
-
-$("#washerQuickBtn").addEventListener("click", () => {
-  stopIntro();
-  setPlaying(false);
-  setApproxEnabled(!state.approx);
-});
-
-$("#railWire").addEventListener("click", () => {
-  stopIntro();
-  setShading(state.mode === "wire" ? "solid" : "wire");
-});
-
-$("#railGrid").addEventListener("click", () => {
-  toggleGrid();
-});
-
-$("#railHelp").addEventListener("click", () => openModal());
-
-/* -------------------------------------------------------------------------- */
-/* Top bar menus, actions, modal, and fullscreen                              */
-/* -------------------------------------------------------------------------- */
-
-function closeMenus() {
-  $$(".menu-wrap.open").forEach((wrapper) => wrapper.classList.remove("open"));
-  $$(".menu-trigger").forEach((trigger) => trigger.setAttribute("aria-expanded", "false"));
-}
-
-$$(".menu-trigger").forEach((trigger) => {
-  trigger.setAttribute("aria-expanded", "false");
-  trigger.addEventListener("click", (event) => {
-    event.stopPropagation();
-    const wrapper = trigger.closest(".menu-wrap");
-    const wasOpen = wrapper.classList.contains("open");
-    closeMenus();
-    if (!wasOpen) {
-      wrapper.classList.add("open");
-      trigger.setAttribute("aria-expanded", "true");
-    }
-  });
-});
-
-document.addEventListener("click", (event) => {
-  if (!event.target.closest(".menu-wrap")) closeMenus();
-});
-
-$$(".menu-popover [data-action]").forEach((button) => {
-  button.addEventListener("click", () => {
-    closeMenus();
-    handleAction(button.dataset.action);
-  });
-});
-
-$$("[data-action]").forEach((button) => {
-  if (button.closest(".menu-popover")) return;
-  button.addEventListener("click", () => handleAction(button.dataset.action));
-});
-
-function handleAction(action) {
-  switch (action) {
-    case "screenshot":
-      exportViewport();
-      break;
-    case "fullscreen":
-      toggleFullscreen();
-      break;
-    case "reset-settings":
-      resetStudy();
-      break;
-    case "frame":
-      frameCase(state.activeCaseId, true);
-      showToast("Framed selected solid");
-      break;
-    case "toggle-grid":
-      toggleGrid();
-      break;
-    case "shading-wire":
-      setShading(state.mode === "wire" ? "solid" : "wire");
-      break;
-    case "shading-xray":
-      setShading(state.mode === "xray" ? "solid" : "xray");
-      break;
-    case "cutaway":
-      stopIntro();
-      setPlaying(false);
-      setAngle(270);
-      showToast("Quarter cutaway · 270°");
-      break;
-    case "about":
-    case "shortcuts":
-      openModal();
-      break;
-    case "builder":
-      openBuilder();
-      break;
-    default:
-      break;
-  }
-}
-
-function openModal() {
-  closeBuilder();
-  const modal = $("#aboutModal");
-  modal.classList.add("open");
-  modal.setAttribute("aria-hidden", "false");
-  $("#modalClose").focus();
-}
-
-function closeModal() {
-  const modal = $("#aboutModal");
-  modal.classList.remove("open");
-  modal.setAttribute("aria-hidden", "true");
-}
-
-$("#modalClose").addEventListener("click", closeModal);
-$("#aboutModal").addEventListener("click", (event) => {
-  if (event.target === event.currentTarget) closeModal();
-});
-
-/* -------------------------------------------------------------------------- */
-/* Custom problem builder                                                     */
-/* -------------------------------------------------------------------------- */
-
-let lastInterpretation = "";
-
-function openBuilder() {
-  closeModal();
-  const modal = $("#builderModal");
-  modal.classList.add("open");
-  modal.setAttribute("aria-hidden", "false");
-
-  if (currentProblem.id === "custom" && currentProblem.raw) {
-    $("#customName").value = currentProblem.title;
-    $("#customUpper").value = currentProblem.raw.upper;
-    $("#customLower").value = currentProblem.raw.lower;
-    $("#customXMin").value = formatInputValue(currentProblem.raw.xMin);
-    $("#customXMax").value = formatInputValue(currentProblem.raw.xMax);
-    $("#customAxis").value = formatInputValue(currentProblem.raw.axis);
-    $("#builderQuestion").value =
-      currentProblem.raw.question || currentProblem.region.description || "";
-    lastInterpretation =
-      currentProblem.raw.explanation || currentProblem.region.description || "";
-    $("#builderEndpoint").textContent = "Editing the current custom problem";
-    setParseStatus("Editing the current custom problem · re-interpret or edit below");
-  } else {
-    $("#builderEndpoint").textContent = "Ready";
-    setParseStatus("Fast JSON extraction · local proxy");
-  }
-
-  hideBuilderError();
-  setParseLoading(false);
-  window.setTimeout(() => $("#builderQuestion").focus(), 60);
-}
-
-function closeBuilder() {
-  const modal = $("#builderModal");
-  modal.classList.remove("open");
-  modal.setAttribute("aria-hidden", "true");
-  aiRequestSerial += 1;
-  setParseLoading(false);
-}
-
-function showBuilderError(message) {
-  const error = $("#builderError");
-  error.textContent = message;
-  error.hidden = false;
-}
-
-function hideBuilderError() {
-  const error = $("#builderError");
-  error.hidden = true;
-  error.textContent = "";
-}
-
-function setParseLoading(loading) {
-  const button = $("#interpretBtn");
-  button.disabled = loading;
-  button.classList.toggle("is-loading", loading);
-  $(".interpret-label", button).textContent = loading
-    ? "Interpreting…"
-    : "Interpret with OpenCode Go";
-  $("#renderCustomBtn").disabled = loading;
-}
-
-function setParseStatus(message, tone = "") {
-  const status = $("#parseStatus");
-  status.textContent = message;
-  status.classList.toggle("is-error", tone === "error");
-  status.classList.toggle("is-success", tone === "success");
-}
-
-function prettyModelName(model) {
-  if (!model) return "OpenCode Go";
-  const id = model.split(":")[0];
-  const names = {
-    "gpt-6-luna": "GPT-6 Luna",
-    "hy4-flash-free": "Hy4 Flash",
-    "deepseek-v4.1-flash": "DeepSeek V4.1 Flash",
-    "claude-haiku-5-5": "Claude Haiku 5.5",
-  };
-  return names[id] || id;
-}
-
-function formatInputValue(value) {
-  const number = Number(value);
-  if (!Number.isFinite(number)) return "";
-  if (Math.abs(number) < 1e-12) return "0";
-  const specials = [
-    [Math.PI, "pi"],
-    [-Math.PI, "-pi"],
-    [Math.PI / 2, "pi/2"],
-    [-Math.PI / 2, "-pi/2"],
-    [Math.PI / 3, "pi/3"],
-    [-Math.PI / 3, "-pi/3"],
-    [Math.PI / 4, "pi/4"],
-    [-Math.PI / 4, "-pi/4"],
-    [Math.PI * 2, "2*pi"],
-    [-Math.PI * 2, "-2*pi"],
-  ];
-  for (const [special, label] of specials) {
-    if (Math.abs(number - special) < 1e-6 * Math.max(1, Math.abs(special))) {
-      return label;
-    }
-  }
-  return formatNumber(number, 6);
-}
-
-function fillManualFields(problem) {
-  $("#customName").value = problem.title || "Custom solid";
-  $("#customUpper").value = problem.upper;
-  $("#customLower").value = problem.lower;
-  $("#customXMin").value = formatInputValue(problem.xMin);
-  $("#customXMax").value = formatInputValue(problem.xMax);
-  $("#customAxis").value = formatInputValue(problem.axisY);
-}
-
-async function interpretQuestion() {
-  const question = $("#builderQuestion").value.trim();
-  if (question.length < 8) {
-    setParseStatus("Add a few more details to the question.", "error");
-    $("#builderQuestion").focus();
-    return;
-  }
-
-  const serial = ++aiRequestSerial;
-  hideBuilderError();
-  setParseLoading(true);
-  setParseStatus("Contacting the local OpenCode service…");
-  const started = performance.now();
-
-  try {
-    const response = await fetch("/api/interpret", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ question }),
-      signal: AbortSignal.timeout(35_000),
-    });
-    const payload = await response.json().catch(() => null);
-
-    if (!response.ok || !payload?.ok) {
-      throw new Error(
-        payload?.error ||
-          "The interpreter could not turn that question into a region.",
-      );
-    }
-    if (serial !== aiRequestSerial) return;
-
-    fillManualFields(payload.problem);
-    lastInterpretation = payload.problem.explanation || "";
-
-    const elapsed = ((performance.now() - started) / 1000).toFixed(1);
-    const modelName = prettyModelName(payload.meta?.model);
-    setParseStatus(
-      payload.meta?.cached
-        ? `Parsed instantly · ${modelName} · review the values below`
-        : `Parsed in ${elapsed}s · ${modelName} · review the values below`,
-      "success",
+function updateGizmo() {
+  if (state.view !== "3d") return;
+  const inverseCamera = camera.quaternion.clone().invert();
+  for (const item of gizmoItems) {
+    const direction = item.vector.clone().applyQuaternion(inverseCamera);
+    const radius = 23;
+    const x = 40 + direction.x * radius;
+    const y = 40 - direction.y * radius;
+    const line = item.group.querySelector("line");
+    const circle = item.group.querySelector("circle");
+    const text = item.group.querySelector("text");
+    line.setAttribute("x1", "40");
+    line.setAttribute("y1", "40");
+    line.setAttribute("x2", x.toFixed(2));
+    line.setAttribute("y2", y.toFixed(2));
+    circle.setAttribute("cx", x.toFixed(2));
+    circle.setAttribute("cy", y.toFixed(2));
+    text.setAttribute("x", x.toFixed(2));
+    text.setAttribute("y", y.toFixed(2));
+    item.group.setAttribute(
+      "opacity",
+      (direction.z > 0 ? 0.96 : 0.45 + direction.z * 0.12).toFixed(3),
     );
-    $("#builderEndpoint").textContent = payload.meta?.cached
-      ? "Cached interpretation"
-      : `${modelName} · ${elapsed}s`;
-    $("#renderCustomBtn").focus();
-  } catch (error) {
-    if (serial !== aiRequestSerial) return;
-    setParseStatus("Interpreter unavailable · fill in the values manually", "error");
-    showBuilderError(
-      `${error.message} You can still enter the boundaries, interval, and rotation line by hand.`,
-    );
-    $("#builderEndpoint").textContent = "Manual input available";
-  } finally {
-    if (serial === aiRequestSerial) setParseLoading(false);
   }
 }
 
-function submitCustomProblem(event) {
-  event.preventDefault();
-  hideBuilderError();
+/* -------------------------------------------------------------------------- */
+/* Counts, export, fullscreen                                                */
+/* -------------------------------------------------------------------------- */
 
-  try {
-    const { problem } = buildCustomProblem({
-      name: $("#customName").value,
-      question: $("#builderQuestion").value,
-      upper: $("#customUpper").value,
-      lower: $("#customLower").value,
-      xMin: $("#customXMin").value,
-      xMax: $("#customXMax").value,
-      axis: $("#customAxis").value,
-      explanation: lastInterpretation,
-    });
-
-    problemRegistry.set("custom", problem);
-    closeBuilder();
-    setShading("solid", { silent: true });
-    loadProblem(problem, {
-      variantId: "custom",
-      animateCamera: true,
-    });
-    setAngle(360);
-    showToast("Custom solid rendered · adjust the axis in the timeline");
-  } catch (error) {
-    showBuilderError(error.message);
-    $("#builderEndpoint").textContent = "Validation failed";
-  }
-}
-
-$("#builderClose").addEventListener("click", closeBuilder);
-$("#builderModal").addEventListener("click", (event) => {
-  if (event.target === event.currentTarget) closeBuilder();
-});
-$("#builderForm").addEventListener("submit", submitCustomProblem);
-$("#interpretBtn").addEventListener("click", interpretQuestion);
-
-$$("[data-example]").forEach((button) => {
-  button.addEventListener("click", () => {
-    $("#builderQuestion").value = button.dataset.example;
-    $("#builderQuestion").focus();
-    setParseStatus("Example loaded · interpret it or edit the fields below");
-    hideBuilderError();
-  });
-});
-
-$("#fillExampleBtn").addEventListener("click", () => {
-  $("#builderQuestion").value =
-    "The region bounded by y = -x^2 + 4x and the x-axis is rotated about y = -1.";
-  fillManualFields({
-    title: "Parabolic cap",
-    upper: "-x^2 + 4*x",
-    lower: "0",
-    xMin: 0,
-    xMax: 4,
-    axisY: -1,
-  });
-  lastInterpretation = "";
-  setParseStatus("Parabola loaded · render or interpret it");
-  hideBuilderError();
-});
-
-async function toggleFullscreen() {
-  try {
-    if (!document.fullscreenElement) {
-      await document.documentElement.requestFullscreen?.();
+function countTriangles() {
+  if (!state.solid) return 0;
+  let total = 0;
+  state.solid.group.traverse((object) => {
+    if (!object.isMesh) return;
+    const geometry = object.geometry;
+    if (!geometry) return;
+    const count = geometry.index
+      ? geometry.index.count
+      : geometry.attributes.position?.count || 0;
+    const drawRange = geometry.drawRange;
+    if (drawRange && drawRange.count !== Infinity) {
+      total += Math.max(0, Math.min(count, drawRange.count) / 3);
     } else {
-      await document.exitFullscreen?.();
+      total += Math.max(0, count / 3);
     }
-  } catch {
-    showToast("Fullscreen is not available in this browser");
-  }
+  });
+  return Math.round(total);
 }
 
-$("#screenshotBtn").addEventListener("click", exportViewport);
-$("#fullscreenBtn").addEventListener("click", toggleFullscreen);
-$("#panelToggle").addEventListener("click", () => {
-  const panel = $("#propertiesPanel");
-  const open = panel.classList.toggle("open");
-  $("#panelToggle").setAttribute("aria-expanded", String(open));
-});
+function updateTriangleCount() {
+  const count = countTriangles();
+  $("#triangleCount").textContent = count
+    ? `${new Intl.NumberFormat("en-US").format(count)} tris`
+    : "— tris";
+}
 
 function exportViewport() {
-  const oldAlpha = renderer.getClearAlpha();
-  const oldColor = new THREE.Color();
-  renderer.getClearColor(oldColor);
-  renderer.setClearColor(0x000000, 0);
-  renderer.render(scene, camera);
-
-  const width = renderer.domElement.width;
-  const height = renderer.domElement.height;
+  const width = Math.max(renderer.domElement.width, 1);
+  const height = Math.max(renderer.domElement.height, 1);
   const exportCanvas = document.createElement("canvas");
   exportCanvas.width = width;
   exportCanvas.height = height;
-  const ctx = exportCanvas.getContext("2d");
-  const gradient = ctx.createRadialGradient(
+  const context = exportCanvas.getContext("2d");
+  const gradient = context.createRadialGradient(
     width * 0.52,
     height * 0.36,
     0,
@@ -1947,103 +1122,109 @@ function exportViewport() {
   gradient.addColorStop(0, "#252b31");
   gradient.addColorStop(0.4, "#181c21");
   gradient.addColorStop(1, "#0d1014");
-  ctx.fillStyle = gradient;
-  ctx.fillRect(0, 0, width, height);
-  ctx.drawImage(renderer.domElement, 0, 0);
+  context.fillStyle = gradient;
+  context.fillRect(0, 0, width, height);
+
+  if (state.view === "2d") {
+    const scaleX = width / Math.max(plotCanvas.clientWidth, 1);
+    const scaleY = height / Math.max(plotCanvas.clientHeight, 1);
+    context.drawImage(plotCanvas, 0, 0, width, height);
+    if (scaleX !== 1 || scaleY !== 1) {
+      // drawImage already scales the bitmap to the export canvas
+    }
+  } else {
+    renderer.render(scene, camera);
+    context.drawImage(renderer.domElement, 0, 0);
+  }
 
   const link = document.createElement("a");
-  link.download = `revolve-study-${activeCase?.id || "a"}-${Math.round(state.angle)}deg.png`;
+  link.download = `revolve-lab-${state.view}-${Math.round(state.sweep)}deg.png`;
   link.href = exportCanvas.toDataURL("image/png");
   link.click();
-
-  renderer.setClearColor(oldColor, oldAlpha);
   showToast("Viewport exported as PNG");
 }
 
+function toggleFullscreen() {
+  if (!document.fullscreenElement) {
+    document.documentElement.requestFullscreen?.().catch(() => {
+      showToast("Fullscreen is not available in this browser");
+    });
+  } else {
+    document.exitFullscreen?.();
+  }
+}
+
+$("#exportBtn").addEventListener("click", exportViewport);
+$("#fullscreenBtn").addEventListener("click", toggleFullscreen);
+
 /* -------------------------------------------------------------------------- */
-/* Keyboard shortcuts                                                         */
+/* Panels, toast, keyboard                                                    */
 /* -------------------------------------------------------------------------- */
+
+$("#panelToggle").addEventListener("click", () => {
+  const panel = $("#editorPanel");
+  const open = panel.classList.toggle("open");
+  $("#panelToggle").setAttribute("aria-expanded", String(open));
+});
+
+let toastTimer = 0;
+function showToast(message, duration = 1800) {
+  const toast = $("#toast");
+  toast.textContent = message;
+  toast.classList.add("show");
+  window.clearTimeout(toastTimer);
+  toastTimer = window.setTimeout(() => toast.classList.remove("show"), duration);
+}
 
 window.addEventListener("keydown", (event) => {
-  if (event.key === "Escape") {
-    closeMenus();
-    closeModal();
-    closeBuilder();
-    if (window.innerWidth <= 900) {
-      $("#propertiesPanel").classList.remove("open");
-      $("#panelToggle").setAttribute("aria-expanded", "false");
-    }
-    return;
-  }
-
   const tag = event.target?.tagName;
   if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
-
-  if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") {
-    event.preventDefault();
-    exportViewport();
-    return;
-  }
-  if (event.metaKey || event.ctrlKey || event.altKey) return;
-
-  if (event.code === "Space") {
-    event.preventDefault();
-    stopIntro();
-    togglePlay();
+  if (event.metaKey || event.ctrlKey || event.altKey) {
+    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") {
+      event.preventDefault();
+      exportViewport();
+    }
     return;
   }
 
   switch (event.key.toLowerCase()) {
-    case "1":
-    case "2":
-    case "3": {
-      const index = Number(event.key) - 1;
-      const variant = currentProblem.variants[index];
-      if (variant) selectCase(variant.id);
-      break;
-    }
-    case "n":
-      openBuilder();
-      break;
-    case "4":
-      stopIntro();
-      setPlaying(false);
-      setAngle(270);
-      showToast("Quarter cutaway · 270°");
-      break;
-    case "5":
-      stopIntro();
-      setPlaying(false);
-      setAngle(0);
-      break;
-    case "6":
-      stopIntro();
-      setPlaying(false);
-      setAngle(360);
+    case " ":
+      event.preventDefault();
+      if (state.view === "3d") setPlaying(!state.playing);
       break;
     case "f":
-      frameCase(state.activeCaseId, true);
-      showToast("Framed selected solid");
-      break;
-    case "g":
-      toggleGrid();
-      break;
-    case "w":
-      setShading(state.mode === "wire" ? "solid" : "wire");
-      break;
-    case "x":
-      setShading(state.mode === "xray" ? "solid" : "xray");
-      break;
-    case "r":
-      if (event.shiftKey) {
-        resetStudy();
-      } else {
-        frameCase(state.activeCaseId, true);
-        showToast("View reset");
+      if (state.view === "3d") {
+        frameSolid({ animate: true });
+        showToast("Framed the solid");
       }
       break;
-    case "?":
-      openModal();
+    case "g":
+      $("#gridBtn").click();
+      break;
+    case "w":
+      $(`.shading-button[data-shading="wire"]`).click();
+      break;
+    case "x":
+      $(`.shading-button[data-shading="xray"]`).click();
+      break;
+    case "r":
+      if (state.view === "3d") {
+        frameSolid({ animate: true });
+        showToast("View reset");
+      } else {
+        plot.fit({ userAction: false });
+      }
+      break;
+    case "1":
+      setView("2d");
+      break;
+    case "2":
+      if (!state.solid || state.stale) generateSolid();
+      else setView("3d");
+      break;
+    case "escape":
+      $("#editorPanel").classList.remove("open");
+      $("#panelToggle").setAttribute("aria-expanded", "false");
       break;
     default:
       break;
@@ -2051,51 +1232,7 @@ window.addEventListener("keydown", (event) => {
 });
 
 /* -------------------------------------------------------------------------- */
-/* View gizmo                                                                 */
-/* -------------------------------------------------------------------------- */
-
-const gizmoItems = [
-  {
-    group: $("#gizmoX"),
-    vector: new THREE.Vector3(1, 0, 0),
-  },
-  {
-    group: $("#gizmoY"),
-    vector: new THREE.Vector3(0, 1, 0),
-  },
-  {
-    group: $("#gizmoZ"),
-    vector: new THREE.Vector3(0, 0, 1),
-  },
-];
-
-function updateGizmo() {
-  const inverseCamera = camera.quaternion.clone().invert();
-  for (const item of gizmoItems) {
-    const direction = item.vector.clone().applyQuaternion(inverseCamera);
-    const radius = 26;
-    const x = 44 + direction.x * radius;
-    const y = 44 - direction.y * radius;
-    const line = item.group.querySelector("line");
-    const circle = item.group.querySelector("circle");
-    const text = item.group.querySelector("text");
-    line.setAttribute("x1", "44");
-    line.setAttribute("y1", "44");
-    line.setAttribute("x2", x.toFixed(2));
-    line.setAttribute("y2", y.toFixed(2));
-    circle.setAttribute("cx", x.toFixed(2));
-    circle.setAttribute("cy", y.toFixed(2));
-    text.setAttribute("x", x.toFixed(2));
-    text.setAttribute("y", y.toFixed(2));
-    item.group.setAttribute(
-      "opacity",
-      (direction.z > 0 ? 0.96 : 0.48 + direction.z * 0.16).toFixed(3),
-    );
-  }
-}
-
-/* -------------------------------------------------------------------------- */
-/* Resize, animation, and boot                                                */
+/* Resize, controls, boot                                                     */
 /* -------------------------------------------------------------------------- */
 
 function resize() {
@@ -2105,115 +1242,66 @@ function resize() {
   renderer.setSize(width, height, false);
   camera.aspect = width / height;
   camera.updateProjectionMatrix();
+  plot.resize();
+  requestRender();
 }
 
-const resizeObserver = new ResizeObserver(() => resize());
+const resizeObserver = new ResizeObserver(resize);
 resizeObserver.observe(viewport);
 window.addEventListener("resize", resize);
 
 controls.addEventListener("start", () => {
-  stopIntro();
-  cameraTween = null;
+  cancelCameraTween();
+  state.playAfterCamera = false;
+});
+controls.addEventListener("change", () => {
+  requestRender();
 });
 
 renderer.domElement.addEventListener("contextmenu", (event) => event.preventDefault());
 
-function animateCamera(now) {
-  if (!cameraTween) return;
-  const progress = clamp(
-    (now - cameraTween.start) / cameraTween.duration,
-    0,
-    1,
-  );
-  const eased =
-    progress < 0.5
-      ? 4 * progress * progress * progress
-      : 1 - Math.pow(-2 * progress + 2, 3) / 2;
-  camera.position.lerpVectors(
-    cameraTween.fromPosition,
-    cameraTween.toPosition,
-    eased,
-  );
-  controls.target.lerpVectors(
-    cameraTween.fromTarget,
-    cameraTween.toTarget,
-    eased,
-  );
-  if (progress >= 1) cameraTween = null;
+function hexToRgba(hex, alpha) {
+  const normalized = String(hex).replace("#", "");
+  const value =
+    normalized.length === 3
+      ? normalized
+          .split("")
+          .map((character) => character + character)
+          .join("")
+      : normalized.padEnd(6, "0");
+  const number = Number.parseInt(value, 16);
+  return `rgba(${(number >> 16) & 255}, ${(number >> 8) & 255}, ${number & 255}, ${alpha})`;
 }
 
-function animate(now) {
-  requestAnimationFrame(animate);
-  const dt = Math.min((now - lastTime) / 1000, 0.05);
-  lastTime = now;
-
-  if (introAnimation) {
-    const progress = clamp(
-      (now - introAnimation.start) / introAnimation.duration,
-      0,
-      1,
-    );
-    const eased = 1 - Math.pow(1 - progress, 3);
-    setAngle(360 * eased);
-    if (progress >= 1) {
-      introAnimation = null;
-      setAngle(360);
-    }
-  } else if (state.playing) {
-    const next = state.angle + dt * 145;
-    setAngle(next);
-    if (next >= 360) {
-      setAngle(360);
-      setPlaying(false);
-    }
-  }
-
-  animateCamera(now);
-  controls.update();
-  updateGizmo();
-  renderer.render(scene, camera);
-
-  fpsFrames += 1;
-  fpsTime += dt;
-  if (fpsTime >= 0.65) {
-    $("#fpsReadout").textContent = `${Math.round(fpsFrames / fpsTime)} FPS`;
-    fpsFrames = 0;
-    fpsTime = 0;
-  }
-
-  if (now - lastTriangleUpdate > 900) {
-    lastTriangleUpdate = now;
-    if (activeSolid) {
-      $("#triangleCount").textContent = `${numberFormat.format(countTriangles())} tris`;
-    }
-  }
+function setCameraForModel(model) {
+  if (!model?.ok) return;
+  const xMid = (model.bounds.xMin + model.bounds.xMax) / 2;
+  const yMid = (model.bounds.yMin + model.bounds.yMax) / 2;
+  const span = Math.max(
+    model.bounds.xMax - model.bounds.xMin,
+    model.bounds.yMax - model.bounds.yMin,
+    1,
+  );
+  controls.target.set(xMid, yMid, 0);
+  camera.position.set(xMid + span * 1.2, yMid + span * 0.7, span * 1.8);
+  camera.lookAt(controls.target);
 }
 
 function boot() {
   resize();
-  loadProblem(PRESET_PROBLEM, {
-    variantId: "a",
-    animateCamera: false,
-    announce: false,
+  buildLineRows();
+  const model = analyzeNow({ fit: true });
+  setCameraForModel(model);
+  setView("2d", { stopPlayback: true });
+  setSweep(360, { ui: true, quiet: true });
+  $("#gridBtn").classList.add("active");
+  $$(".view-tab").forEach((button) => {
+    button.setAttribute(
+      "aria-pressed",
+      String(button.dataset.view === "2d"),
+    );
   });
-  setTool("orbit");
-  setShadingButtonState("solid");
-  $("#railGrid").classList.add("active");
-  setAngle(360);
-  updateApproxUI();
-
-  requestAnimationFrame(() => {
-    resize();
-    frameCase(state.activeCaseId, false);
-    if (!reducedMotion) {
-      introAnimation = {
-        start: performance.now() + 520,
-        duration: 2400,
-      };
-    }
-  });
-
-  requestAnimationFrame(animate);
+  requestRender();
 }
 
 boot();

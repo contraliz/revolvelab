@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta
       name="description"
-      content="An interactive Blender-style solids-of-revolution studio with AI-assisted custom problems."
+      content="A local, dark, Desmos-style solids-of-revolution studio. Enter functions and a rotation line to build the solid and exact volume."
     />
     <title>Revolve Lab — Solids of Revolution</title>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
@@ -19,23 +19,24 @@
     <link rel="stylesheet" href="/src/style.css" />
   </head>
   <body>
-    <div class="app-shell">
+    <div class="app-shell" id="appShell">
       <header class="topbar">
         <button
           class="panel-toggle"
           id="panelToggle"
-          aria-label="Toggle properties panel"
+          aria-label="Toggle expression panel"
           aria-expanded="false"
         >
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-            <path d="M4 7h16M4 12h16M4 17h10"/>
+            <path d="M4 7h16M4 12h16M4 17h10" />
           </svg>
         </button>
+
         <div class="brand">
           <span class="brand-mark" aria-hidden="true">
             <svg viewBox="0 0 24 24" fill="none">
-              <path d="M12 2.8 20.2 7v10L12 21.2 3.8 17V7L12 2.8Z" stroke="currentColor" stroke-width="1.35"/>
-              <path d="m3.9 7.1 8.1 4.5 8.1-4.5M12 11.6v9.5" stroke="currentColor" stroke-width="1.35"/>
+              <path d="M12 2.8 20.2 7v10L12 21.2 3.8 17V7L12 2.8Z" stroke="currentColor" stroke-width="1.35" />
+              <path d="m3.9 7.1 8.1 4.5 8.1-4.5M12 11.6v9.5" stroke="currentColor" stroke-width="1.35" />
             </svg>
           </span>
           <span class="brand-name">REVOLVE<span>LAB</span></span>
@@ -43,131 +44,172 @@
           <span class="brand-project" id="brandProject">Parabolic cap</span>
         </div>
 
-        <nav class="top-menus" aria-label="Application menus">
-          <div class="menu-wrap">
-            <button class="menu-trigger" data-menu="file">File</button>
-            <div class="menu-popover" data-popover="file">
-              <button data-action="screenshot"><span>Export viewport PNG</span><kbd>⌘S</kbd></button>
-              <button data-action="fullscreen"><span>Toggle fullscreen</span><kbd>F11</kbd></button>
-              <div class="menu-sep"></div>
-              <button data-action="reset-settings"><span>Reset study</span><kbd>⇧R</kbd></button>
-            </div>
-          </div>
-          <div class="menu-wrap">
-            <button class="menu-trigger" data-menu="view">View</button>
-            <div class="menu-popover" data-popover="view">
-              <button data-action="frame"><span>Frame selected</span><kbd>F</kbd></button>
-              <button data-action="toggle-grid"><span>Toggle grid</span><kbd>G</kbd></button>
-              <button data-action="shading-wire"><span>Wireframe</span><kbd>W</kbd></button>
-              <button data-action="shading-xray"><span>X-ray</span><kbd>X</kbd></button>
-              <div class="menu-sep"></div>
-              <button data-action="cutaway"><span>Quarter cutaway</span><kbd>4</kbd></button>
-            </div>
-          </div>
-          <div class="menu-wrap">
-            <button class="menu-trigger" data-menu="problem">Problem</button>
-            <div class="menu-popover" data-popover="problem">
-              <div id="problemMenuList"></div>
-              <div class="menu-sep"></div>
-              <button data-action="builder"><span>New problem from a question…</span><kbd>N</kbd></button>
-            </div>
-          </div>
-          <div class="menu-wrap">
-            <button class="menu-trigger" data-menu="help">Help</button>
-            <div class="menu-popover" data-popover="help">
-              <button data-action="about"><span>About this study</span><kbd>?</kbd></button>
-              <button data-action="shortcuts"><span>Keyboard shortcuts</span></button>
-            </div>
-          </div>
+        <nav class="view-nav" aria-label="View">
+          <button class="view-tab active" data-view="2d" id="view2dBtn">
+            <span class="view-tab-index">2D</span>
+            <span>Graph</span>
+          </button>
+          <button class="view-tab" data-view="3d" id="view3dBtn">
+            <span class="view-tab-index">3D</span>
+            <span>Solid</span>
+          </button>
         </nav>
 
         <div class="topbar-readout">
           <span class="live-dot"></span>
-          <span id="topbarScene">Study A · disk</span>
+          <span id="topbarScene">Local math · 2D graph</span>
         </div>
 
         <div class="topbar-tools">
-          <button
-            class="icon-button topbar-icon"
-            id="screenshotBtn"
-            aria-label="Export viewport image"
-            data-tooltip="Export PNG"
-          >
+          <button class="icon-button" id="exportBtn" aria-label="Export viewport image" data-tooltip="Export PNG">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-              <path d="M12 3v11m0 0 4-4m-4 4-4-4M5 17v2.2h14V17"/>
+              <path d="M12 3v11m0 0 4-4m-4 4-4-4M5 17v2.2h14V17" />
             </svg>
           </button>
-          <button
-            class="icon-button topbar-icon"
-            id="fullscreenBtn"
-            aria-label="Toggle fullscreen"
-            data-tooltip="Fullscreen"
-          >
+          <button class="icon-button" id="fullscreenBtn" aria-label="Toggle fullscreen" data-tooltip="Fullscreen">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-              <path d="M8.5 3.5h-5v5m16-5h-5m5 0v5m-16 11h5m-5-5v5m16-5v5h-5"/>
+              <path d="M8.5 3.5h-5v5m16-5h-5m5 0v5m-16 11h5m-5-5v5m16-5v5h-5" />
             </svg>
           </button>
         </div>
       </header>
 
       <div class="workspace">
-        <aside class="toolrail" aria-label="Viewport tools">
-          <button class="rail-button active" data-tool="orbit" data-tooltip="Orbit · left drag">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-              <circle cx="12" cy="12" r="5.2"/><path d="M12 2.7v2.1M12 19.2v2.1M2.7 12h2.1M19.2 12h2.1"/>
-              <circle cx="12" cy="12" r="1" fill="currentColor" stroke="none"/>
-            </svg>
-          </button>
-          <button class="rail-button" data-tool="pan" data-tooltip="Pan · left drag">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-              <path d="M12 3v18M3 12h18M12 3l-2.3 2.3M12 3l2.3 2.3M12 21l-2.3-2.3M12 21l2.3-2.3M3 12l2.3-2.3M3 12l2.3 2.3M21 12l-2.3-2.3M21 12l-2.3 2.3"/>
-            </svg>
-          </button>
-          <button class="rail-button" data-tool="zoom" data-tooltip="Zoom · left drag">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-              <circle cx="10.5" cy="10.5" r="6.2"/><path d="m15.2 15.2 4.5 4.5M10.5 7.7v5.6M7.7 10.5h5.6"/>
-            </svg>
-          </button>
-          <div class="rail-rule"></div>
-          <button class="rail-button" id="frameBtn" data-tooltip="Frame selected · F">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-              <path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>
-              <rect x="8.2" y="8.2" width="7.6" height="7.6" rx="1" stroke-dasharray="1.5 2.2"/>
-            </svg>
-          </button>
-          <button class="rail-button" id="railWire" data-tooltip="Wireframe · W">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.3">
-              <path d="m12 3 8.2 4.6v8.8L12 21l-8.2-4.6V7.6L12 3Z"/>
-              <path d="M3.8 7.6 12 12l8.2-4.4M12 12v9M3.8 16.4 12 12M12 21l8.2-4.6"/>
-            </svg>
-          </button>
-          <div class="rail-spacer"></div>
-          <button class="rail-button" id="railGrid" data-tooltip="Toggle grid · G">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4">
-              <path d="M4 4h16v16H4zM4 9.3h16M4 14.6h16M9.3 4v16M14.6 4v16"/>
-            </svg>
-          </button>
-          <button class="rail-button" id="railHelp" data-tooltip="Shortcuts · ?">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-              <circle cx="12" cy="12" r="8.4"/><path d="M9.7 9a2.4 2.4 0 1 1 3.5 2.2c-.8.4-1.2 1-1.2 1.9M12 16.7v.2"/>
-            </svg>
-          </button>
+        <aside class="editor" id="editorPanel" aria-label="Expression editor">
+          <div class="editor-scroll">
+            <section class="expression-section">
+              <div class="section-heading">
+                <span>FUNCTIONS</span>
+                <span class="section-hint">y = f(x) · any number</span>
+              </div>
+              <div class="line-list" id="lineList"></div>
+              <button class="add-line-button" id="addLineBtn" type="button">
+                <span class="add-line-plus">+</span>
+                <span>Add line</span>
+              </button>
+            </section>
+
+            <section class="axis-section">
+              <div class="section-heading">
+                <span>LINE OF ROTATION</span>
+                <span class="section-hint">any straight line</span>
+              </div>
+              <div class="axis-input-row">
+                <span class="axis-swatch" aria-hidden="true"></span>
+                <input
+                  id="axisInput"
+                  class="expression-input axis-input"
+                  type="text"
+                  value="y = 0"
+                  spellcheck="false"
+                  autocomplete="off"
+                  autocapitalize="off"
+                  aria-label="Line of rotation"
+                />
+              </div>
+              <div class="axis-examples">
+                <span>Try</span>
+                <button type="button" data-axis-example="y = 0">y = 0</button>
+                <button type="button" data-axis-example="y = -1">y = −1</button>
+                <button type="button" data-axis-example="y = 2x + 1">y = 2x + 1</button>
+                <button type="button" data-axis-example="x = 3">x = 3</button>
+              </div>
+            </section>
+
+            <button class="generate-button" id="generateBtn" type="button">
+              <span class="generate-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                  <path d="M12 3v18M3 12h18M12 3l-2.4 2.4M12 3l2.4 2.4M12 21l-2.4-2.4M12 21l2.4-2.4M3 12l2.4-2.4M3 12l2.4 2.4M21 12l-2.4-2.4M21 12l-2.4 2.4" />
+                </svg>
+              </span>
+              <span class="generate-copy">
+                <strong id="generateLabel">Generate solid</strong>
+                <small>pan to 3D and play the revolve</small>
+              </span>
+              <span class="generate-arrow" aria-hidden="true">↗</span>
+            </button>
+
+            <div class="editor-error" id="editorError" role="status" aria-live="polite" hidden></div>
+
+            <section class="results" id="results" hidden>
+              <div class="volume-card">
+                <div class="volume-card-top">
+                  <span class="eyebrow" id="volumeEyebrow">EXACT VOLUME</span>
+                  <span class="method-badge" id="methodBadge">DISK METHOD</span>
+                </div>
+                <div class="volume-figure">
+                  <div class="fraction" id="volumeFraction">
+                    <span id="volumeNumerator">512π</span>
+                    <i></i>
+                    <span id="volumeDenominator">15</span>
+                  </div>
+                  <div class="volume-decimal">
+                    <span class="approx-mark">≈</span>
+                    <span id="volumeDecimal">107.233</span>
+                    <small>u³</small>
+                  </div>
+                </div>
+                <div class="volume-caption" id="volumeCaption">
+                  The parabola touches the axis at both ends, so the slices are disks.
+                </div>
+              </div>
+
+              <div class="math-section">
+                <div class="section-heading">
+                  <span>INTEGRAL SETUP</span>
+                  <span class="method-mini" id="methodMini">DISK</span>
+                </div>
+                <div class="formula-block" id="formulaBlock"></div>
+                <div class="formula-result" id="formulaResult"></div>
+                <p class="formula-note" id="formulaNote"></p>
+              </div>
+
+              <div class="region-readout">
+                <span class="region-readout-label">REGION</span>
+                <div class="region-readout-copy" id="regionReadout"></div>
+              </div>
+            </section>
+
+            <section class="syntax-help">
+              <div class="syntax-help-title">LOCAL PARSER</div>
+              <p>
+                Desmos syntax: <code>x^2</code>, <code>sqrt(x)</code>,
+                <code>sin(x)</code>, <code>pi</code>, <code>e</code>,
+                <code>{0 &lt;= x &lt;= 2}</code>, <code>{x &lt; 0 or x &gt; 2}</code>.
+                Piecewise: <code>{x &lt; 0: -x, x^2}</code>.
+              </p>
+              <p class="syntax-foot">Everything is evaluated and integrated locally.</p>
+            </section>
+          </div>
         </aside>
 
         <main class="viewport" id="viewport">
-          <canvas id="sceneCanvas"></canvas>
-          <div class="viewport-wash"></div>
-          <div class="viewport-vignette"></div>
-          <div class="viewport-noise"></div>
+          <canvas id="sceneCanvas" class="scene-canvas"></canvas>
 
-          <div class="scene-heading">
+          <div class="graph-stage" id="graphStage">
+            <canvas id="plotCanvas" class="plot-canvas" aria-label="2D graph of the region"></canvas>
+            <div class="graph-toolbar">
+              <div class="graph-badge"><i></i>2D GRAPH</div>
+              <div class="graph-tools">
+                <button class="graph-tool" id="fitGraphBtn" type="button">Fit</button>
+                <span class="graph-tool-hint">drag to pan · scroll to zoom</span>
+              </div>
+            </div>
+            <div class="graph-axis-chip" id="graphAxisChip">ROTATION · y = 0</div>
+            <div class="graph-empty" id="graphEmpty" hidden>
+              <strong>No enclosed region</strong>
+              <span>Add a second curve or a domain restriction.</span>
+            </div>
+          </div>
+
+          <div class="scene-heading" id="sceneHeading">
             <div class="scene-breadcrumb">
-              <span>SCENE</span><i>/</i><span>SOLIDS OF REVOLUTION</span><i>/</i><span id="caseCrumb">STUDY A</span>
+              <span>SCENE</span><i>/</i><span>SOLIDS OF REVOLUTION</span><i>/</i><span id="caseCrumb">REGION</span>
             </div>
             <div class="scene-title-row">
               <span class="scene-dot" id="sceneDot"></span>
-              <h2 id="objectName">About the x-axis</h2>
-              <span class="selected-badge">SELECTED</span>
+              <h2 id="objectName">About y = 0</h2>
+              <span class="selected-badge">SOLID</span>
             </div>
             <div class="scene-subline">
               <span id="objectMethod">Disk method</span>
@@ -176,111 +218,47 @@
             </div>
           </div>
 
-          <div class="viewport-toolbar">
-            <div class="shading-group" role="group" aria-label="Viewport shading">
-              <button class="shading-button active" data-shading="solid" data-tooltip="Material preview">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4">
-                  <circle cx="12" cy="12" r="7.8"/><path d="M5.5 9.8a10 10 0 0 0 9.2 7.7M8.7 4.8a11 11 0 0 1 9.1 6.2" opacity=".55"/>
-                </svg>
-              </button>
-              <button class="shading-button" data-shading="xray" data-tooltip="X-ray">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4">
-                  <circle cx="12" cy="12" r="7.8" stroke-dasharray="1.5 2"/><circle cx="12" cy="12" r="3.1" opacity=".55"/>
-                </svg>
-              </button>
-              <button class="shading-button" data-shading="wire" data-tooltip="Wireframe">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.15">
-                  <path d="m12 3.2 7.7 4.3v8.9L12 20.8l-7.7-4.4V7.5L12 3.2Z"/>
-                  <path d="m4.3 7.5 7.7 4.3 7.7-4.3M12 11.8v9M4.3 16.4l7.7-4.6 7.7 4.6"/>
-                </svg>
-              </button>
-            </div>
-            <span class="toolbar-divider"></span>
-            <button
-              class="icon-button viewport-icon"
-              id="washerQuickBtn"
-              data-tooltip="Riemann washers"
-              aria-label="Toggle Riemann washers"
-            >
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.35">
-                <ellipse cx="12" cy="6.2" rx="7.2" ry="2.5"/>
-                <path d="M4.8 6.2v4.1c0 1.4 3.2 2.5 7.2 2.5s7.2-1.1 7.2-2.5V6.2M4.8 10.3v4c0 1.4 3.2 2.5 7.2 2.5s7.2-1.1 7.2-2.5v-4M4.8 14.3v3.5c0 1.4 3.2 2.5 7.2 2.5s7.2-1.1 7.2-2.5v-3.5"/>
-              </svg>
-            </button>
-            <button class="icon-button viewport-icon" id="resetViewBtn" data-tooltip="Reset view · R">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-                <path d="M4.3 9.2A8.2 8.2 0 1 1 4 14.7M4.3 9.2V4.4m0 4.8h4.8"/>
-              </svg>
-            </button>
-            <span class="toolbar-divider"></span>
-            <div class="view-angle-group" role="group" aria-label="Revolve presets">
-              <button
-                class="view-angle-button"
-                data-angle="0"
-                data-tooltip="Profile view · 0°"
-              >
-                Profile
-              </button>
-              <button
-                class="view-angle-button"
-                data-angle="360"
-                data-tooltip="Full revolution · 360°"
-              >
-                360°
-              </button>
-            </div>
-          </div>
-
-          <div class="axis-chip">
+          <div class="axis-chip" id="axisChip">
             <span class="axis-glyph">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-                <path d="M4 12h16M4 12l3-2M4 12l3 2M20 12l-3-2M20 12l-3 2"/>
+                <path d="M4 12h16M4 12l3-2M4 12l3 2M20 12l-3-2M20 12l-3 2" />
               </svg>
             </span>
             <span class="axis-chip-copy"><small>ROTATION AXIS</small><strong id="axisChipLabel">y = 0</strong></span>
           </div>
 
-          <div class="nav-gizmo" aria-label="View orientation">
-            <svg id="gizmoSvg" viewBox="0 0 88 88" aria-hidden="true">
-              <circle cx="44" cy="44" r="34" class="gizmo-ring"/>
-              <circle cx="44" cy="44" r="2.6" class="gizmo-center"/>
-              <g id="gizmoX" class="gizmo-axis gizmo-x">
-                <line x1="44" y1="44" x2="44" y2="44"/>
-                <circle cx="44" cy="44" r="7.2"/>
-                <text x="44" y="44">X</text>
-              </g>
-              <g id="gizmoY" class="gizmo-axis gizmo-y">
-                <line x1="44" y1="44" x2="44" y2="44"/>
-                <circle cx="44" cy="44" r="7.2"/>
-                <text x="44" y="44">Y</text>
-              </g>
-              <g id="gizmoZ" class="gizmo-axis gizmo-z">
-                <line x1="44" y1="44" x2="44" y2="44"/>
-                <circle cx="44" cy="44" r="7.2"/>
-                <text x="44" y="44">Z</text>
-              </g>
-            </svg>
-            <span>VIEW</span>
-          </div>
-
-          <div class="graph-dock" id="graphDock">
-            <div class="graph-head">
-              <span class="graph-title"><i class="graph-live"></i>GENERATING REGION</span>
-              <span class="graph-badge">2D</span>
+          <div class="viewport-toolbar" id="viewportToolbar">
+            <div class="shading-group" role="group" aria-label="Viewport shading">
+              <button class="shading-button active" data-shading="solid" data-tooltip="Solid">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4">
+                  <circle cx="12" cy="12" r="7.8" /><path d="M5.5 9.8a10 10 0 0 0 9.2 7.7M8.7 4.8a11 11 0 0 1 9.1 6.2" opacity=".55" />
+                </svg>
+              </button>
+              <button class="shading-button" data-shading="xray" data-tooltip="X-ray">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4">
+                  <circle cx="12" cy="12" r="7.8" stroke-dasharray="1.5 2" /><circle cx="12" cy="12" r="3.1" opacity=".55" />
+                </svg>
+              </button>
+              <button class="shading-button" data-shading="wire" data-tooltip="Wireframe">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.15">
+                  <path d="m12 3.2 7.7 4.3v8.9L12 20.8l-7.7-4.4V7.5L12 3.2Z" />
+                  <path d="m4.3 7.5 7.7 4.3 7.7-4.3M12 11.8v9M4.3 16.4l7.7-4.6 7.7 4.6" />
+                </svg>
+              </button>
             </div>
-            <svg
-              id="regionGraph"
-              class="region-graph"
-              viewBox="0 0 280 150"
-              role="img"
-              aria-label="Graph of the region being revolved"
-            ></svg>
-            <div class="graph-foot">
-              <span><i class="curve-dot upper"></i>f(x)</span>
-              <span><i class="curve-dot lower"></i>g(x)</span>
-              <span><i class="curve-dot rotation"></i>axis</span>
-              <span class="graph-scale" id="graphScale">x: 0…4</span>
-            </div>
+            <span class="toolbar-divider"></span>
+            <button class="icon-button viewport-icon" id="resetViewBtn" data-tooltip="Frame solid · F">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                <path d="M4.3 9.2A8.2 8.2 0 1 1 4 14.7M4.3 9.2V4.4m0 4.8h4.8" />
+              </svg>
+            </button>
+            <button class="icon-button viewport-icon active" id="gridBtn" data-tooltip="Grid · G">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4">
+                <path d="M4 4h16v16H4zM4 9.3h16M4 14.6h16M9.3 4v16M14.6 4v16" />
+              </svg>
+            </button>
+            <span class="toolbar-divider"></span>
+            <button class="text-tool-button" id="backToGraphBtn" type="button">Edit region</button>
           </div>
 
           <div class="timeline-dock" id="timelineDock">
@@ -289,31 +267,22 @@
               <div class="timeline-angle"><span id="angleReadout">360</span><small>°</small></div>
             </div>
             <div class="transport">
-              <button class="transport-button" id="toStartBtn" data-tooltip="Go to profile">
+              <button class="transport-button" id="toStartBtn" data-tooltip="Profile">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
-                  <path d="M6 5v14M18 6l-8 6 8 6V6Z"/>
+                  <path d="M6 5v14M18 6l-8 6 8 6V6Z" />
                 </svg>
               </button>
               <button class="play-button" id="playBtn" data-tooltip="Play revolve · Space">
-                <svg class="icon-play" viewBox="0 0 24 24" fill="currentColor"><path d="m8.8 5.3 9 6.7-9 6.7V5.3Z"/></svg>
-                <svg class="icon-pause" viewBox="0 0 24 24" fill="currentColor"><path d="M7.6 5h3.2v14H7.6zM13.2 5h3.2v14h-3.2z"/></svg>
+                <svg class="icon-play" viewBox="0 0 24 24" fill="currentColor"><path d="m8.8 5.3 9 6.7-9 6.7V5.3Z" /></svg>
+                <svg class="icon-pause" viewBox="0 0 24 24" fill="currentColor"><path d="M7.6 5h3.2v14H7.6zM13.2 5h3.2v14h-3.2z" /></svg>
               </button>
-              <button class="transport-button" id="toEndBtn" data-tooltip="Complete the revolve">
+              <button class="transport-button" id="toEndBtn" data-tooltip="Full solid">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
-                  <path d="M18 5v14M6 6l8 6-8 6V6Z"/>
+                  <path d="M18 5v14M6 6l8 6-8 6V6Z" />
                 </svg>
               </button>
               <div class="range-wrap">
-                <input
-                  id="angleRange"
-                  class="angle-range"
-                  type="range"
-                  min="0"
-                  max="360"
-                  step="0.5"
-                  value="360"
-                  aria-label="Revolve angle"
-                />
+                <input id="angleRange" class="angle-range" type="range" min="0" max="360" step="0.5" value="360" aria-label="Revolve angle" />
                 <div class="range-ticks"><span>0°</span><span>90°</span><span>180°</span><span>270°</span><span>360°</span></div>
               </div>
               <div class="quick-angles">
@@ -323,222 +292,36 @@
               </div>
             </div>
           </div>
+
+          <div class="view-gizmo" id="viewGizmo" aria-label="View orientation">
+            <svg viewBox="0 0 80 80" aria-hidden="true">
+              <circle cx="40" cy="40" r="30" class="gizmo-ring" />
+              <g id="gizmoX" class="gizmo-axis gizmo-x"><line x1="40" y1="40" x2="40" y2="40" /><circle cx="40" cy="40" r="6.5" /><text x="40" y="40">X</text></g>
+              <g id="gizmoY" class="gizmo-axis gizmo-y"><line x1="40" y1="40" x2="40" y2="40" /><circle cx="40" cy="40" r="6.5" /><text x="40" y="40">Y</text></g>
+              <g id="gizmoZ" class="gizmo-axis gizmo-z"><line x1="40" y1="40" x2="40" y2="40" /><circle cx="40" cy="40" r="6.5" /><text x="40" y="40">Z</text></g>
+            </svg>
+          </div>
         </main>
-
-        <aside class="panel" id="propertiesPanel">
-          <div class="panel-hero">
-            <button class="build-problem-button" id="buildProblemBtn">
-              <span class="build-problem-icon">+</span>
-              <span><strong>Ask a new question</strong><small>AI-assisted custom solid</small></span>
-              <span class="build-problem-arrow">↗</span>
-            </button>
-            <div class="region-card">
-              <div class="region-equation" id="regionEquation">y = −x² + 4x</div>
-              <div class="region-domain" id="regionDomain">0 ≤ x ≤ 4 <span>·</span> 0 ≤ y ≤ f(x)</div>
-            </div>
-          </div>
-
-          <div class="panel-scroll">
-            <section class="panel-section cases-section">
-              <div class="case-list" id="caseList"></div>
-            </section>
-
-            <section class="volume-card" id="volumeCard">
-              <div class="volume-card-top">
-                <span class="eyebrow" id="volumeEyebrow">EXACT VOLUME</span>
-                <span class="method-badge" id="methodBadge">DISK METHOD</span>
-              </div>
-              <div class="volume-figure">
-                <div class="fraction" id="volumeFraction">
-                  <span id="volumeNumerator">512π</span>
-                  <i></i>
-                  <span id="volumeDenominator">15</span>
-                </div>
-                <div class="volume-decimal">
-                  <span class="approx-mark">≈</span>
-                  <span id="volumeDecimal">107.233</span>
-                  <small>u³</small>
-                </div>
-              </div>
-              <div class="volume-caption" id="volumeCaption">
-                The parabola touches the axis at both ends.
-              </div>
-            </section>
-
-            <section class="panel-section math-section">
-              <div class="section-heading"><span>Integral setup</span><span class="method-mini" id="methodMini">DISK</span></div>
-              <div class="radius-row">
-                <span>RADII</span>
-                <code id="radiusSummary">R(x) = −x² + 4x</code>
-              </div>
-              <div class="equation-block">
-                <div class="equation-main" id="integralText">V = π ∫₀⁴ (−x² + 4x)² dx</div>
-                <div class="equation-sub" id="expansionText">= π ∫₀⁴ (x⁴ − 8x³ + 16x²) dx</div>
-                <div class="equation-result" id="resultText">= 512π / 15</div>
-              </div>
-              <p class="case-note" id="caseNote">
-                The region touches the axis, so every cross-section is a solid disk.
-              </p>
-            </section>
-
-            <section class="panel-section approximation-section">
-              <div class="section-heading">
-                <span>Riemann approximation</span>
-                <label class="switch" data-tooltip="Show washers at 360°">
-                  <input type="checkbox" id="approxToggle" aria-label="Show Riemann washers" />
-                  <span class="switch-track"><i></i></span>
-                </label>
-              </div>
-              <div class="approx-body" id="approxBody">
-                <div class="approx-formula" id="approxFormula">Σ π [ f(xᵢ) ]² Δx</div>
-                <div class="approx-stats">
-                  <div><span>SLICES</span><strong id="nValue">24</strong></div>
-                  <div><span>ESTIMATE</span><strong id="approxValue">107.14 u³</strong></div>
-                </div>
-                <input
-                  id="nRange"
-                  class="n-range"
-                  type="range"
-                  min="4"
-                  max="96"
-                  step="1"
-                  value="24"
-                  aria-label="Number of Riemann slices"
-                />
-                <div class="error-row">
-                  <span id="errorText">0.09% below exact</span>
-                  <div class="error-track"><i id="errorFill"></i></div>
-                </div>
-                <p class="approx-note" id="approxNote">Enable to inspect the washer stack. This snaps the study to a full revolution.</p>
-              </div>
-            </section>
-          </div>
-        </aside>
       </div>
 
       <footer class="statusbar">
         <div class="status-left">
           <span class="status-ready"><i></i>READY</span>
           <span class="status-sep"></span>
-          <span class="status-hint">LMB orbit <b>·</b> RMB pan <b>·</b> scroll zoom</span>
+          <span class="status-hint" id="statusHint">LMB pan · scroll zoom</span>
         </div>
-        <div class="status-center" id="statusMessage">Solid of revolution selected</div>
+        <div class="status-center" id="statusMessage">2D graph · drag to pan</div>
         <div class="status-right">
           <span id="triangleCount">— tris</span>
           <span class="status-sep"></span>
-          <span id="fpsReadout">60 FPS</span>
+          <span id="fpsReadout">IDLE</span>
           <span class="status-sep"></span>
-          <span>WebGL</span>
+          <span>WEBGL</span>
         </div>
       </footer>
     </div>
 
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
-
-    <div class="modal-backdrop" id="aboutModal" aria-hidden="true">
-      <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="aboutTitle">
-        <button class="modal-close" id="modalClose" aria-label="Close dialog">×</button>
-        <div class="modal-eyebrow">ABOUT THE STUDY</div>
-        <h2 id="aboutTitle">One region.<br />Three axes.</h2>
-        <p id="aboutText">
-          The bounded region between <code>y = −x² + 4x</code> and the x-axis is
-          rotated about three different horizontal lines. Each choice changes the
-          inner and outer radii of a cross-section, but the same washer idea applies.
-        </p>
-        <div class="modal-volumes" id="aboutVolumes"></div>
-        <div class="shortcut-grid">
-          <span><kbd>1</kbd><kbd>2</kbd><kbd>3</kbd> switch study</span>
-          <span><kbd>Space</kbd> play revolve</span>
-          <span><kbd>F</kbd> frame view</span>
-          <span><kbd>X</kbd> x-ray</span>
-          <span><kbd>W</kbd> wireframe</span>
-          <span><kbd>G</kbd> toggle grid</span>
-          <span><kbd>N</kbd> new problem</span>
-        </div>
-        <p class="modal-footnote">Built with Three.js · AI interpretation via local OpenCode Go</p>
-      </div>
-    </div>
-
-    <div class="modal-backdrop builder-backdrop" id="builderModal" aria-hidden="true">
-      <form class="modal-card builder-card" id="builderForm" role="dialog" aria-modal="true" aria-labelledby="builderTitle">
-        <button class="modal-close" id="builderClose" type="button" aria-label="Close dialog">×</button>
-        <div class="modal-eyebrow"><span class="ai-orb"></span>NEW PROBLEM · OPENCODE GO</div>
-        <h2 id="builderTitle">Describe the solid.</h2>
-        <p class="builder-intro">
-          Type the word problem. The interpreter extracts the region, intersection
-          bounds, and horizontal rotation line, then you can review the equations
-          before rendering.
-        </p>
-
-        <div class="question-block">
-          <label class="field-label" for="builderQuestion">WORD PROBLEM</label>
-          <textarea
-            id="builderQuestion"
-            rows="3"
-            placeholder="The region bounded by y = sqrt(x) and y = x is rotated about the line y = 2."
-          ></textarea>
-          <div class="example-row">
-            <span>TRY</span>
-            <button type="button" data-example="The region bounded by y = -x^2 + 4x and the x-axis is rotated about y = -1.">Parabola · y = −1</button>
-            <button type="button" data-example="The region bounded by y = sqrt(x) and y = x is rotated about y = 2.">√x and x · y = 2</button>
-            <button type="button" data-example="The region bounded by y = x^2 and y = 2 - x^2 is rotated about the x-axis.">Two parabolas</button>
-          </div>
-          <div class="parse-row">
-            <button class="interpret-button" id="interpretBtn" type="button">
-              <span class="interpret-icon">✦</span>
-              <span class="interpret-label">Interpret with OpenCode Go</span>
-              <span class="interpret-spinner" aria-hidden="true"></span>
-            </button>
-            <span class="parse-status" id="parseStatus" role="status" aria-live="polite">Fast JSON extraction · local proxy</span>
-          </div>
-        </div>
-
-        <div class="builder-divider"><span>REVIEW OR EDIT THE PARSED VALUES</span></div>
-
-        <div class="builder-error" id="builderError" hidden></div>
-
-        <div class="builder-grid">
-          <label class="builder-field span-2">
-            <span>PROBLEM NAME</span>
-            <input id="customName" type="text" placeholder="Custom solid" autocomplete="off" />
-          </label>
-          <label class="builder-field">
-            <span>UPPER BOUNDARY y =</span>
-            <input id="customUpper" type="text" placeholder="-x^2 + 4*x" spellcheck="false" />
-          </label>
-          <label class="builder-field">
-            <span>LOWER BOUNDARY y =</span>
-            <input id="customLower" type="text" placeholder="0" spellcheck="false" value="0" />
-          </label>
-          <label class="builder-field">
-            <span>FROM x =</span>
-            <input id="customXMin" type="text" placeholder="0" spellcheck="false" />
-          </label>
-          <label class="builder-field">
-            <span>TO x =</span>
-            <input id="customXMax" type="text" placeholder="4" spellcheck="false" />
-          </label>
-          <label class="builder-field span-2">
-            <span>ROTATE ABOUT THE LINE y =</span>
-            <input id="customAxis" type="text" placeholder="0" spellcheck="false" />
-          </label>
-        </div>
-
-        <div class="builder-hint">
-          Region between two curves <code>y=f(x)</code> and <code>y=g(x)</code>
-          over <code>[a,b]</code>, rotated about a horizontal line. Expressions
-          accept <code>x</code>, <code>pi</code>, <code>sqrt()</code>,
-          <code>sin()</code>, <code>exp()</code>, and the usual operators.
-        </div>
-
-        <div class="builder-actions">
-          <span class="builder-endpoint" id="builderEndpoint">Ready</span>
-          <button class="secondary-button" id="fillExampleBtn" type="button">Load example</button>
-          <button class="primary-button" id="renderCustomBtn" type="submit">Render solid</button>
-        </div>
-      </form>
-    </div>
-
     <script type="module" src="/src/main.js"></script>
   </body>
 </html>

@@ -1,6 +1,15 @@
 # Revolve Lab
 
-## Installation
+A local, dark, Desmos-style studio for solids of revolution. Enter any number of
+function lines and a rotation line, inspect the enclosed region on a 2D graph,
+then generate a 3D solid with an exact volume and a styled integral setup.
+
+Everything runs in the browser. There is no AI parser, no model service, no API
+proxy, and no network math dependency.
+
+![Revolve Lab interface](preview.png)
+
+## Getting started
 
 ```bash
 git clone https://github.com/contraliz/revolvelab.git
@@ -9,146 +18,165 @@ npm install
 npm run dev
 ```
 
-Open the local URL printed by Vite.
-
-**Requirements**
-
-- Node.js 20+
-- No font install is needed: the UI bundles MesloLGS Nerd Font in `public/fonts`.
-- For AI question parsing: a running local OpenCode service with the
-  `opencode-go` provider authenticated. Manual equation entry works without it.
-
-Production build:
+Open the local URL printed by Vite. Node.js 20+ is recommended. The UI bundles
+MesloLGS Nerd Font in `public/fonts`, so no font installation is needed.
 
 ```bash
 npm run build
 npm run preview
 ```
 
-`npm run preview` also runs the local AI proxy.
+## What it does
 
-![Revolve Lab interface](preview.png)
+- Starts on a full-size 2D graph with a compact expression sidebar.
+- Accepts any number of `y = f(x)` lines, each with its own color.
+- Finds the enclosed region or regions where pairs of curves meet or are cut by
+  a domain restriction.
+- Supports horizontal, vertical, and slanted rotation lines:
+  `y = 0`, `y = -1`, `y = 2x + 1`, `x = 3`.
+- Shows the exact volume when the result is a rational multiple of π, and a
+  high-accuracy numerical volume otherwise.
+- Displays the washer/disk or perpendicular-slice integral setup with styled
+  limits, brackets, exponents, radii, and the final result.
+- Generates the solid with a 2D → 3D camera transition and plays the revolve
+  from profile to full solid.
+- Renders on demand. There is no OrbitControls damping or inertial glide, and
+  the animation loop stops when the scene is idle.
 
-A Blender-inspired, interactive Three.js study of solids of revolution. It ships
-with the parabolic region
+## Desmos-compatible input
 
-\[
-y=-x^2+4x,\qquad 0\le x\le 4,
-\]
+Function lines are entered as the right-hand side of `y = f(x)`. A leading
+`y =` or `f(x) =` is also accepted.
 
-and adds an AI-assisted problem builder: type a word problem, review the parsed
-region, and render a new solid.
+### Expressions
 
-## Custom problems
-
-![Natural-language problem builder](builder-preview.png)
-
-Click **Ask a new question** in the properties panel, or press `N`.
-
-The first version supports regions between two functions \(y=f(x)\) and
-\(y=g(x)\) on an interval \([a,b]\), rotated about a horizontal line
-\(y=k\). You can either:
-
-1. Type a word problem and click **Interpret with OpenCode Go**.
-2. Fill in the boundary equations, interval, and rotation line manually.
-
-The parsed values are always shown for review before rendering. Expressions
-support `x`, `pi`, `e`, `sqrt()`, `sin()`, `cos()`, `exp()`, `log()`, powers,
-and the usual arithmetic operators.
-
-Examples:
-
-- `The region bounded by y = sqrt(x) and y = x is rotated about y = 2.`
-- `The region bounded by y = x^2 and y = 2 - x^2 is rotated about the x-axis.`
-- `The region bounded by y = 4 - x^2 and the x-axis is rotated about y = -1.`
-
-Vertical and slanted rotation lines are detected and rejected in this version.
-Custom volumes are evaluated numerically with adaptive Simpson integration and
-shown as a numerical volume rather than a symbolic fraction.
-
-## How the AI parsing works
-
-The browser sends the question to `/api/interpret`, a small Vite middleware in
-`vite.config.js`. That server-side handler reads the local OpenCode service
-registration, calls OpenCode Go through the local API, and validates the model
-output before returning it.
-
-The provider key is never sent to the browser.
-
-The default interpreter model is **DeepSeek V4.1 Flash** with low reasoning.
-If that model is temporarily unavailable, the request falls back to Hy4 Flash.
-
-Relevant environment variables:
-
-```bash
-OPENCODE_PARSE_PROVIDER=opencode-go
-OPENCODE_PARSE_MODEL=deepseek-v4.1-flash
-OPENCODE_PARSE_VARIANT=low
-OPENCODE_PARSE_FALLBACK_MODEL=hy4-flash-free
-OPENCODE_PARSE_FALLBACK_VARIANT=none
+```text
+-x^2 + 4x
+sqrt(x)
+sin(pi x)
+e^x
+|x - 1|
+2x(x + 1)
+log(100)
+ln(e)
 ```
 
-Optional service file overrides:
+Supported syntax includes:
 
-```bash
-OPENCODE_STATE_FILE=/path/to/state/opencode/service.json
-OPENCODE_CONFIG_FILE=/path/to/config/opencode/service.json
+- arithmetic: `+ - * / ^`, unary minus, implicit multiplication (`2x`, `x(x+1)`,
+  `2 sin(x)`)
+- constants: `pi`, `tau`, `e`, `infinity`
+- functions: `sqrt`, `cbrt`, `abs`, `sin`, `cos`, `tan`, `cot`, `sec`, `csc`,
+  inverses such as `asin`/`arcsin`, hyperbolics, `ln`, `log` (base 10),
+  `log10`, `exp`, `floor`, `ceil`, `round`, `sign`, `min`, `max`, `mod`,
+  `nthroot`, `atan2`, `pow`
+- comparisons: `<`, `<=`, `>`, `>=`, `=`, `!=`
+- logical operators: `and`, `or`, `not`
+- chained comparisons: `0 <= x <= 2`
+
+### Domain restrictions
+
+Attach curly braces to a function, exactly as in Desmos:
+
+```text
+-x^2 + 4x {0 <= x <= 4}
+x^2 {0 <= x <= 2}
+sqrt(x - 3) + 2 {3 <= x <= 12}
 ```
 
-The parser requires a running local OpenCode service with an authenticated
-`opencode-go` provider. If it is unavailable, the manual fields still work.
-Static deployments need their own equivalent backend endpoint; the bundled Vite
-middleware only runs during `dev` and `preview`.
+Multiple restrictions intersect:
 
-## The built-in volumes
+```text
+x^2 {x > 0}{x < 2}
+```
 
-### A. Rotation about the \(x\)-axis
+Use `and` / `or` for more complex domains:
 
-\[
-V_A=\pi\int_0^4(-x^2+4x)^2\,dx
-=\frac{512\pi}{15}
-\approx 107.233\ \text{u}^3.
-\]
+```text
+x^2 {x > 0 and x < 2}
+x^2 {x < 0 or x > 2}
+```
 
-### B. Rotation about \(y=-1\)
+A restriction may involve `y` as well; it is evaluated against the function
+value.
 
-\[
-V_B=\pi\int_0^4\left[(-x^2+4x+1)^2-1\right]dx
-=\frac{832\pi}{15}
-\approx 174.254\ \text{u}^3.
-\]
+### Piecewise functions
 
-### C. Rotation about \(y=5\)
+```text
+{x < 0: -x, x >= 0: x^2}
+{x < -1: -2, -1 <= x <= 1: x, 2}
+```
 
-\[
-V_C=\pi\int_0^4\left[25-\left(5-(-x^2+4x)\right)^2\right]dx
-=\frac{1088\pi}{15}
-\approx 227.870\ \text{u}^3.
-\]
+Branches are evaluated left to right. A branch without a condition is the
+fallback value.
 
-## Interaction
+## How the math works
 
-- **Orbit / pan / zoom** with left drag, right drag, and the scroll wheel.
-- **Timeline** sweeps the source region from \(0^\circ\) to \(360^\circ\).
-- **Cutaway** stops at \(270^\circ\) so the washer-shaped cross-sections are visible.
-- **Shading** switches between material preview, X-ray, and wireframe.
-- **Washers** displays a midpoint Riemann approximation with adjustable slice count.
-- **Profile / Full solid** snaps back to the source region or the completed solid.
-- **Viewport presets** repeat the `Profile` and `360°` actions in the top-right viewport toolbar.
-- **Generating region graph** shows a color-coded 2D graph of \(f(x)\), \(g(x)\), and the rotation line.
-- **3D coordinate frame** draws faint neutral \(x\), \(y\), and \(z\) axes with small numbered tick marks that scale with zoom, plus floor and vertical grid planes alongside the orange rotation axis.
-- Keyboard: `1` `2` `3` switch axes, `Space` play/pause, `4` cutaway, `F` frame, `G` grid, `W` wireframe, `X` X-ray, `N` new problem.
+For horizontal rotation lines `y = k`, the region is sliced perpendicular to the
+x-axis. Each slice contributes an annulus with outer radius `R(x)` and inner
+radius `r(x)`:
 
-## Geometry notes
+```text
+V = π ∫ [R(x)² − r(x)²] dx
+```
 
-The renderer builds surfaces of revolution from radial inner/outer profiles over
-an arbitrary \(x\)-interval. It adds annular end caps when a problem does not
-pinch to zero thickness at the domain boundary. This is what allows the original
-parabola and new custom shapes such as cylinders or hemispheres to share the
-same pipeline.
+If the rotation line touches the region, the inner radius is zero and the slice
+is a disk.
 
-The interface is an original Blender-inspired layout built with Three.js. It is
-not affiliated with Blender.
+For vertical or slanted lines, the same idea is applied in coordinates measured
+along the rotation line. The region is sampled as a polygon, sliced
+perpendicular to the axis, and each slice is rotated into a disk or annulus. This
+also works when the rotation line passes through the region.
+
+Exact volumes are detected when `V / π` is a rational number with a small
+denominator. For example, the default region gives `512π/15`. Polynomial
+boundaries, `sqrt` boundaries about `y = 0`, and restricted polynomial regions
+can all produce exact results. Other shapes use adaptive Simpson integration
+(horizontal axes) or high-resolution perpendicular slicing and are labeled
+**numerical volume**.
+
+The region finder looks for intervals where a pair of curves is closed at both
+ends — either because the curves meet or because a domain restriction ends.
+Nested regions are removed so overlapping pairs are not double-counted.
+
+## 3D view
+
+- One xz grid plane at `y = 0`, centered on the true origin.
+- `x`, `y`, and `z` axes pass through `(0, 0, 0)`.
+- The orange dashed line is the actual rotation line.
+- The source region is shown as a cut face at profile angle 0°.
+- Shading modes: solid, X-ray, and wireframe.
+- Timeline: profile, cutaway, full solid, and scrubbable angle.
+
+## Controls
+
+- **2D graph:** drag to pan, scroll to zoom, double-click or **Fit** to reframe.
+- **3D:** left drag to orbit, right drag to pan, scroll to zoom.
+- `Space` play/pause, `F` frame, `G` grid, `W` wireframe, `X` X-ray,
+  `R` reset view, `1` graph, `2` solid, `Esc` close the mobile panel.
+- On narrow screens, the expression panel opens from the top-left menu button.
+
+## Performance notes
+
+- WebGL renders only when the camera, solid, animation, or graph changes.
+- `OrbitControls.enableDamping` is off, so a released drag stops immediately.
+- Pixel ratio is capped at 2.
+- The solid builder omits the inner surface when the shape is a disk, and clamps
+  zero-radius tips to clean points instead of tiny caps.
+- The continuous animation loop stops as soon as playback and camera tweening
+  finish.
+
+## Project layout
+
+```text
+src/expression.js   safe Desmos-style parser/evaluator and integration
+src/region.js       region finding, rotation axes, volume, formula metadata
+src/solid.js        revolved mesh builder for horizontal and slanted axes
+src/plot2d.js       interactive 2D canvas graph
+src/main.js         UI, Three.js scene, transitions, render-on-demand loop
+src/style.css       dark expression-editor layout
+index.html          application shell
+```
 
 ## Credits
 
@@ -156,3 +184,6 @@ The interface uses **MesloLGS Nerd Font** for every label, equation, and control
 The font is bundled in `public/fonts` under the Apache License 2.0, with Nerd
 Fonts patches under the MIT and SIL OFL 1.1 licenses. See
 `public/fonts/MesloLGSNerdFont-LICENSE.txt`.
+
+The parser and geometry pipeline are original implementations built with
+Three.js. This project is not affiliated with Desmos or Blender.

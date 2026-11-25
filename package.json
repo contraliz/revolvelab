@@ -2,7 +2,7 @@
   "name": "revolve-lab",
   "version": "1.0.0",
   "private": true,
-  "description": "Blender-style interactive solids of revolution with AI-assisted custom problems",
+  "description": "A local, dark, Desmos-style solids-of-revolution studio with exact volumes.",
   "repository": {
     "type": "git",
     "url": "https://github.com/contraliz/revolvelab.git"

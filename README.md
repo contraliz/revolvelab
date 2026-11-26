@@ -37,8 +37,9 @@ npm run preview
   quadrant, so `y = 4 - x^2` immediately gives the quarter-cap region.
 - Finds the enclosed region or regions where pairs of curves meet or are cut by
   a domain restriction or a vertical boundary.
-- Supports horizontal, vertical, and slanted rotation lines:
-  `y = 0`, `y = -1`, `y = 2x + 1`, `x = 3`.
+- Supports any straight rotation line: horizontal, vertical, slanted, and
+  implicit equations such as `y = 0`, `y = -1`, `y = 2x + 1`, `x = 3`,
+  `2x + 3y = 6`, and `y - 1 = 2(x - 3)`.
 - Shows the exact volume when the result is a rational multiple of π, and a
   high-accuracy numerical volume otherwise.
 - Displays the washer/disk or perpendicular-slice integral setup with styled
@@ -60,6 +61,23 @@ x = 4
 
 A leading `y =` or `f(x) =` is optional. A line beginning with `x =` is a
 vertical boundary that can close the left or right side of the region.
+
+### Rotation-line input
+
+The line of rotation accepts any equation of a straight line:
+
+```text
+y = 0
+y = 2x + 1
+x = 3
+2x + 3y = 6
+y - 1 = 2(x - 3)
+```
+
+Explicit equations are read as `y = mx + b` or `x = c`. Implicit equations are
+also accepted, including equations with terms on both sides. A bare expression
+such as `2x + 1` is treated as `y = 2x + 1`. The line must be straight; curves
+such as `y = x^2` are rejected with an explanation.
 
 If only one function curve is present (vertical boundary lines may also be
 present), the editor assumes the remaining boundaries are the coordinate axes
@@ -143,10 +161,11 @@ V = π ∫ [R(x)² − r(x)²] dx
 If the rotation line touches the region, the inner radius is zero and the slice
 is a disk.
 
-For vertical or slanted lines, the same idea is applied in coordinates measured
-along the rotation line. The region is sampled as a polygon, sliced
-perpendicular to the axis, and each slice is rotated into a disk or annulus. This
-also works when the rotation line passes through the region.
+For any other straight line — vertical, slanted, or given in implicit form —
+the same idea is applied in coordinates measured along the rotation line. The
+region is sampled as a polygon, sliced perpendicular to the axis, and each slice
+is rotated into a disk or annulus. This also works when the rotation line passes
+through the region.
 
 Exact volumes are detected when `V / π` is a rational number with a small
 denominator. For example, the default region gives `512π/15`. Polynomial
@@ -171,10 +190,13 @@ double-counted.
 - `x`, `y`, and `z` axes pass through `(0, 0, 0)`.
 - The orange dashed line is the actual rotation line.
 - The source region is shown as a cut face at profile angle 0°.
-- Shading modes: solid, X-ray, and a sparse meridian/ring wireframe.
+- Shading modes: solid and X-ray surfaces, plus a sparse meridian/ring
+  wireframe with constant-width screen-space lines.
 - The wireframe is a contour network, not the full triangle mesh, so it stays
   legible on high-resolution solids.
 - Timeline: profile, cutaway, full solid, and scrubbable angle.
+- Updating an already-visible solid keeps the current camera and revolve angle,
+  so the view does not flash back to the profile during mesh generation.
 
 ## Controls
 
@@ -199,8 +221,12 @@ double-counted.
 - The solid builder omits the inner surface when the shape is a disk, skips
   zero-thickness caps, and refines each profile to its true zero-radius end so
   pointed tips close cleanly instead of being sliced into a small cap.
-- The wireframe is a sparse set of meridians and rings rendered as lines, not a
-  triangle mesh.
+- Profile rings are concentrated near crests and tips, and open crests get a
+  subtle rounded lift so shallow rims shade smoothly instead of looking like a
+  flat annular band.
+- The wireframe is a sparse set of meridians and rings rendered as screen-space
+  `Line2` strokes, not a triangle mesh. The strokes keep a constant pixel width
+  as the camera zooms, so the network stays sharp instead of thinning out.
 - The continuous animation loop stops as soon as playback and camera tweening
   finish.
 

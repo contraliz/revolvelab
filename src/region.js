@@ -677,11 +677,94 @@ function buildPairCells(lines, window, verticalXs = [], options = {}) {
 /* Rotation line                                                              */
 /* -------------------------------------------------------------------------- */
 
-function formatAxisValue(value) {
-  return (
-    formatExactNumber(value) ??
-    formatNumber(value, 6).replace("-", "−")
-  );
+/**
+ * Find the single top-level "=" in a line equation. Comparisons such as <=,
+ * >=, !=, and == are not equation separators, and nested brackets are ignored.
+ */
+function findEquationSeparator(source) {
+  let depth = 0;
+  let separator = -1;
+
+  for (let index = 0; index < source.length; index++) {
+    const character = source[index];
+    if (character === "(" || character === "{" || character === "[") {
+      depth += 1;
+      continue;
+    }
+    if (character === ")" || character === "}" || character === "]") {
+      depth = Math.max(0, depth - 1);
+      continue;
+    }
+    if (character !== "=" || depth !== 0) continue;
+
+    const previous = source[index - 1] ?? "";
+    const next = source[index + 1] ?? "";
+    if (previous === "<" || previous === ">" || previous === "!" || previous === "=") {
+      continue;
+    }
+    if (next === "=") continue;
+    if (separator >= 0) {
+      throw new RegionError(
+        "Use exactly one = in the rotation-line equation.",
+      );
+    }
+    separator = index;
+  }
+
+  return separator;
+}
+
+/**
+ * Fit A, B, C so that the input equation is A x + B y + C = 0. Sampling at
+ * the origin and unit vectors gives the coefficients; extra samples verify
+ * that the expression really is a straight line rather than a curve.
+ */
+function extractLineCoefficients(evaluate) {
+  const sample = (x, y) => {
+    try {
+      const value = evaluate(x, y);
+      return Number.isFinite(value) ? value : Number.NaN;
+    } catch {
+      return Number.NaN;
+    }
+  };
+
+  const atOrigin = sample(0, 0);
+  const atX = sample(1, 0);
+  const atY = sample(0, 1);
+  if (![atOrigin, atX, atY].every(Number.isFinite)) {
+    return { error: "domain" };
+  }
+
+  const a = atX - atOrigin;
+  const b = atY - atOrigin;
+  const c = atOrigin;
+  const probes = [
+    [2.3, -1.7],
+    [-3.1, 2.2],
+    [0.7, 4.9],
+    [-2.7, -3.3],
+    [5.5, 7.25],
+  ];
+
+  for (const [x, y] of probes) {
+    const actual = sample(x, y);
+    const predicted = a * x + b * y + c;
+    if (!Number.isFinite(actual)) return { error: "domain" };
+    const scale = Math.max(
+      1,
+      Math.abs(actual),
+      Math.abs(predicted),
+      Math.abs(a * x),
+      Math.abs(b * y),
+      Math.abs(c),
+    );
+    if (Math.abs(actual - predicted) > 1e-9 * scale) {
+      return { error: "straight" };
+    }
+  }
+
+  return { a, b, c };
 }
 
 function parseRotationLine(text) {
@@ -690,10 +773,68 @@ function parseRotationLine(text) {
     throw new RegionError("Enter a rotation line, for example y = 0.");
   }
 
-  const verticalMatch = source.match(/^\s*x\s*=\s*(.+)$/i);
-  if (verticalMatch) {
-    const value = compileExpression(verticalMatch[1], { allowVariable: false });
-    const x = value.evaluate(0, 0);
+  const separator = findEquationSeparator(source);
+  let evaluate;
+  let labelSource = source;
+
+  if (separator >= 0) {
+    const leftText = source.slice(0, separator).trim();
+    const rightText = source.slice(separator + 1).trim();
+    if (!leftText || !rightText) {
+      throw new RegionError(
+        "A rotation-line equation needs an expression on both sides of =.",
+      );
+    }
+
+    let left;
+    let right;
+    try {
+      left = compileExpression(leftText);
+      right = compileExpression(rightText);
+    } catch (error) {
+      throw new RegionError(`Rotation line: ${error.message}`);
+    }
+    evaluate = (x, y) => left.evaluate(x, y) - right.evaluate(x, y);
+  } else {
+    let expression;
+    try {
+      expression = compileExpression(source);
+    } catch (error) {
+      throw new RegionError(`Rotation line: ${error.message}`);
+    }
+    if (usesVariable(expression.ast, "y")) {
+      throw new RegionError(
+        "Include an equals sign, for example 2x + 3y = 6.",
+      );
+    }
+    // Keep the original shorthand: a bare expression means y = expression.
+    evaluate = (x, y) => y - expression.evaluate(x, y);
+    labelSource = `y = ${source}`;
+  }
+
+  const coefficients = extractLineCoefficients(evaluate);
+  if (coefficients.error === "domain") {
+    throw new RegionError("The rotation line must be defined everywhere.");
+  }
+  if (coefficients.error === "straight") {
+    throw new RegionError(
+      "The rotation line must be straight. Use y = mx + b, x = c, or Ax + By = C.",
+    );
+  }
+
+  const { a, b, c } = coefficients;
+  if (Math.hypot(a, b) < 1e-12) {
+    throw new RegionError(
+      "This equation does not describe a single straight line.",
+    );
+  }
+
+  const label = prettyExpression(labelSource);
+  const vertical =
+    Math.abs(b) <= 1e-12 * Math.max(Math.abs(a), Math.abs(b), 1);
+
+  if (vertical) {
+    const x = -c / a;
     if (!Number.isFinite(x)) {
       throw new RegionError("The vertical rotation line needs a finite x-value.");
     }
@@ -701,55 +842,19 @@ function parseRotationLine(text) {
       source,
       point: { x, y: 0 },
       direction: { x: 0, y: 1 },
-      label: /^\s*x\s*=/.test(source)
-        ? prettyExpression(source)
-        : `x = ${formatAxisValue(x)}`,
+      label,
       kind: "vertical",
       slope: null,
       intercept: null,
     });
   }
 
-  const rhs = source.replace(/^\s*y\s*=\s*/i, "");
-  let expression;
-  try {
-    expression = compileExpression(rhs);
-  } catch (error) {
-    throw new RegionError(`Rotation line: ${error.message}`);
+  const slope = -a / b;
+  const intercept = -c / b;
+  if (!Number.isFinite(slope) || !Number.isFinite(intercept)) {
+    throw new RegionError("The rotation line must have finite coordinates.");
   }
-  if (usesVariable(expression.ast, "y")) {
-    throw new RegionError(
-      "Use y = mx + b or x = c for the rotation line.",
-    );
-  }
-
-  const evaluate = (x) => {
-    const value = expression.evaluate(x, 0);
-    return Number.isFinite(value) ? value : Number.NaN;
-  };
-  const x0 = 0;
-  const x1 = 1;
-  const x2 = -2.7;
-  const y0 = evaluate(x0);
-  const y1 = evaluate(x1);
-  const y2 = evaluate(x2);
-  if (![y0, y1, y2].every(Number.isFinite)) {
-    throw new RegionError("The rotation line must be defined everywhere.");
-  }
-  const slope = y1 - y0;
-  const predicted = y0 + slope * (x2 - x0);
-  if (Math.abs(predicted - y2) > 1e-7 * Math.max(1, Math.abs(y2))) {
-    throw new RegionError(
-      "The rotation line must be straight. Use y = mx + b or x = c.",
-    );
-  }
-
   const horizontal = Math.abs(slope) < 1e-9;
-  const intercept = y0 - slope * x0;
-  const prettySource = prettyExpression(source);
-  const label = /^\s*(?:x|y)\s*=/.test(prettySource)
-    ? prettySource
-    : `y = ${prettySource}`;
 
   return makeAxis({
     source,
@@ -884,6 +989,14 @@ function cellLocalIntervalsAtU(cell, axis, u) {
       deduped.push(value);
     }
   }
+
+  // A slice tangent to the polygon has one crossing rather than two. Keep it
+  // as a zero-width interval: at a rim this preserves the rim radius instead
+  // of collapsing the surface to the rotation axis.
+  if (deduped.length === 1) {
+    return [[deduped[0], deduped[0]]];
+  }
+
   const intervals = [];
   for (let index = 0; index + 1 < deduped.length; index += 2) {
     if (deduped[index + 1] - deduped[index] > 1e-9) {
@@ -914,7 +1027,7 @@ export function cellRadialIntervalAt(cell, axis, u) {
     const upper = cell.upper(point.x);
     if (!Number.isFinite(lower) || !Number.isFinite(upper)) return null;
     const [inner, outer] = radialFromSignedInterval(lower, upper);
-    if (outer - inner < 1e-12) return null;
+    if (outer < 1e-12) return null;
     return { inner, outer, bands: [[inner, outer]] };
   }
 
@@ -946,7 +1059,7 @@ export function cellSideRadialIntervalAt(cell, axis, u, sign) {
       inner = Math.max(0, -upper);
       outer = -lower;
     }
-    if (outer - inner < 1e-9) return null;
+    if (outer < 1e-9) return null;
     return { inner, outer };
   }
 
@@ -954,13 +1067,15 @@ export function cellSideRadialIntervalAt(cell, axis, u, sign) {
   const radial = [];
   for (const [a, b] of localIntervals) {
     if (sign > 0) {
+      if (b < -1e-9) continue;
       const lo = Math.max(0, a);
       const hi = Math.max(0, b);
-      if (hi - lo > 1e-9) radial.push([lo, hi]);
+      if (hi >= 1e-10) radial.push([lo, hi]);
     } else {
+      if (a > 1e-9) continue;
       const lo = Math.max(0, -b);
       const hi = Math.max(0, -a);
-      if (hi - lo > 1e-9) radial.push([lo, hi]);
+      if (hi >= 1e-10) radial.push([lo, hi]);
     }
   }
   const union = intervalUnion(radial);

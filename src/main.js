@@ -33,7 +33,7 @@ const canvas = $("#sceneCanvas");
 const plotCanvas = $("#plotCanvas");
 const plot = new RegionPlot(plotCanvas);
 const qualityRenderScale = Math.min(window.devicePixelRatio || 1, 1.25);
-const wireRenderScale = Math.min(window.devicePixelRatio || 1, 2);
+const wireRenderScale = Math.min(window.devicePixelRatio || 1, 3);
 let renderScale = qualityRenderScale;
 
 const state = {
@@ -110,7 +110,7 @@ scene.environmentIntensity = 0.36;
 room.dispose?.();
 pmrem.dispose();
 
-const hemi = new THREE.HemisphereLight(0xc8e2ff, 0x1b1512, 0.52);
+const hemi = new THREE.HemisphereLight(0xc8e2ff, 0x1b1512, 0.62);
 scene.add(hemi);
 
 const keyLight = new THREE.DirectionalLight(0xfff2df, 1.9);
@@ -121,7 +121,7 @@ const fillLight = new THREE.DirectionalLight(0x6edcd6, 0.78);
 fillLight.position.set(-7, 3.8, -5);
 scene.add(fillLight);
 
-const rimLight = new THREE.DirectionalLight(0xff7c38, 1.55);
+const rimLight = new THREE.DirectionalLight(0xff8d50, 0.95);
 rimLight.position.set(1.5, -4.5, -6);
 scene.add(rimLight);
 
@@ -948,6 +948,7 @@ function generateSolid() {
     return;
   }
   newSolid.applyMode(state.mode);
+  newSolid.setResolution(viewport.clientWidth, viewport.clientHeight);
   scene.add(newSolid.group);
   newSolid.group.updateMatrixWorld(true);
 
@@ -961,20 +962,35 @@ function generateSolid() {
   state.stale = false;
   state.lowFpsWindows = 0;
   $("#generateLabel").textContent = "Update solid";
-  const first3d = state.view !== "3d";
-  setView("3d", { stopPlayback: true, frame: false });
-  setSweep(reducedMotion ? 360 : 0, { ui: true, quiet: true });
-  state.solid.updateSweep(state.sweep * DEG);
-  state.playAfterCamera = !reducedMotion;
-  frameSolid({ animate: !reducedMotion, fromHigh: first3d });
-  if (reducedMotion) {
-    setSweep(360, { ui: true, quiet: true });
-    state.solid.updateSweep(TAU);
+
+  // Updating an already-visible solid should be seamless: keep the camera and
+  // the revolve angle. Resetting the sweep here made the full solid disappear
+  // back to the profile for a frame, which read as a screen blink.
+  const keepCurrentView = Boolean(previousSolid) && state.view === "3d";
+  if (keepCurrentView) {
+    state.playAfterCamera = false;
+    setSweep(state.sweep, { ui: true, quiet: true });
+    updateRotationAxisVisual(model);
+    updateChrome();
+    updateTriangleCount();
+    requestRender();
+  } else {
+    const first3d = state.view !== "3d";
+    setView("3d", { stopPlayback: true, frame: false });
+    setSweep(reducedMotion ? 360 : 0, { ui: true, quiet: true });
+    state.solid.updateSweep(state.sweep * DEG);
+    state.playAfterCamera = !reducedMotion;
+    frameSolid({ animate: !reducedMotion, fromHigh: first3d });
+    if (reducedMotion) {
+      setSweep(360, { ui: true, quiet: true });
+      state.solid.updateSweep(TAU);
+    }
+    updateRotationAxisVisual(model);
+    updateChrome();
+    updateTriangleCount();
+    requestRender();
   }
-  updateRotationAxisVisual(model);
-  updateChrome();
-  updateTriangleCount();
-  requestRender();
+
   if (window.innerWidth <= 980) $("#editorPanel").classList.remove("open");
 }
 
@@ -1057,6 +1073,7 @@ $$(".shading-button").forEach((button) => {
       entry.classList.toggle("active", entry.dataset.shading === mode);
     });
     state.solid?.applyMode(mode);
+    gridMaterial.uniforms.uOpacity.value = mode === "wire" ? 0.42 : 1;
     if (mode === "wire") {
       setRenderScale(wireRenderScale);
     } else if (previousMode === "wire") {
@@ -1183,7 +1200,7 @@ function countTriangles() {
   if (!state.solid) return 0;
   let total = 0;
   state.solid.group.traverse((object) => {
-    if (!object.isMesh) return;
+    if (!object.isMesh || object.userData.skipTriangleCount) return;
     let parent = object;
     while (parent) {
       if (parent.visible === false) return;
@@ -1349,6 +1366,7 @@ function resize() {
   renderer.setSize(width, height, false);
   camera.aspect = width / height;
   camera.updateProjectionMatrix();
+  state.solid?.setResolution(width, height);
   plot.resize();
   requestRender();
 }

@@ -1,4 +1,7 @@
 import * as THREE from "three";
+import { Line2 } from "three/addons/lines/Line2.js";
+import { LineGeometry } from "three/addons/lines/LineGeometry.js";
+import { LineMaterial } from "three/addons/lines/LineMaterial.js";
 import {
   cellRadialIntervalAt,
   cellSideRadialIntervalAt,
@@ -11,7 +14,8 @@ const SEG_U_BASE = 96;
 const CAP_SEGMENTS = 144;
 const CONTOUR_MERIDIANS = 12;
 const CONTOUR_RINGS = 9;
-const CONTOUR_SEGMENTS = 96;
+const CONTOUR_SEGMENTS = 144;
+const CONTOUR_MERIDIAN_STEPS = 96;
 const EPS = 1e-6;
 
 function basisForAxis(axis) {
@@ -35,6 +39,63 @@ function segmentsForRange(range) {
   );
 }
 
+/**
+ * Sample along the axis with more rings near both ends, where profiles tend to
+ * turn sharply into crests or pointed tips. Uniform sampling leaves the crest
+ * of a shallow paraboloid as one or two flat-looking bands.
+ */
+function sampleRange(range, segments) {
+  const values = new Array(segments + 1);
+  for (let index = 0; index <= segments; index++) {
+    const t = index / segments;
+    const eased = 0.5 - 0.5 * Math.cos(Math.PI * t);
+    values[index] = range.min + (range.max - range.min) * eased;
+  }
+  return values;
+}
+
+/**
+ * At an open crest the inner and outer sheets meet at a zero-width ring. The
+ * mathematical profile is smooth there, but a shallow profile reads as a flat
+ * plateau. Lift the rings around that rim along the axis to give the mesh a
+ * softly rounded lip without changing the radii or the volume calculation.
+ */
+function makeCrestLift(range, radialFn) {
+  const span = Math.max(range.max - range.min, 1e-8);
+  const crests = [];
+
+  for (const endpoint of [range.min, range.max]) {
+    const radial = radialFn(endpoint);
+    if (!radial || radial.outer < 1e-5) continue;
+    const width = radial.outer - radial.inner;
+    if (width > Math.max(1e-6, radial.outer * 1e-4)) continue;
+
+    const radius = (radial.outer + radial.inner) / 2;
+    crests.push({
+      u: endpoint,
+      radius,
+      direction: endpoint === range.max ? 1 : -1,
+      axialSpan: Math.min(span * 0.16, radius * 0.7),
+      radialSpan: Math.min(radius * 0.8, span * 0.3),
+      lift: Math.min(span * 0.06, radius * 0.1),
+    });
+  }
+
+  if (crests.length === 0) return null;
+
+  return (u, radius) => {
+    let result = u;
+    for (const crest of crests) {
+      const axial = Math.abs(u - crest.u) / crest.axialSpan;
+      const radial = Math.abs(radius - crest.radius) / crest.radialSpan;
+      if (axial >= 1 || radial >= 1) continue;
+      const falloff = (1 - axial * axial) ** 2 * (1 - radial * radial) ** 2;
+      result += crest.direction * crest.lift * falloff;
+    }
+    return result;
+  };
+}
+
 function radialAt(cell, axis, u) {
   return cellRadialIntervalAt(cell, axis, u);
 }
@@ -43,9 +104,9 @@ function sideRadialAt(cell, axis, u, sign) {
   return cellSideRadialIntervalAt(cell, axis, u, sign);
 }
 
-function buildSurfaceGeometry(radialFn, range, startAngle, which) {
-  const span = Math.max(range.max - range.min, 1e-8);
+function buildSurfaceGeometry(radialFn, range, startAngle, which, crestLift) {
   const segmentsU = segmentsForRange(range);
+  const samples = sampleRange(range, segmentsU);
   const positions = [];
   const indices = [];
   let previous = null;
@@ -55,7 +116,7 @@ function buildSurfaceGeometry(radialFn, range, startAngle, which) {
     const cos = Math.cos(phi);
     const sin = Math.sin(phi);
     for (let i = 0; i <= segmentsU; i++) {
-      const u = range.min + (span * i) / segmentsU;
+      const u = samples[i];
       let radial = radialFn(u);
       if (!radial) {
         radial =
@@ -66,7 +127,8 @@ function buildSurfaceGeometry(radialFn, range, startAngle, which) {
       previous = radial;
       const rawRadius = which === "outer" ? radial.outer : radial.inner;
       const radius = rawRadius < 1e-5 ? 0 : rawRadius;
-      positions.push(u, radius * cos, radius * sin);
+      const renderedU = crestLift ? crestLift(u, radius) : u;
+      positions.push(renderedU, radius * cos, radius * sin);
     }
   }
 
@@ -238,14 +300,15 @@ function maxInnerForSide(radialFn, range) {
   return maxInner;
 }
 
-function buildSidePolygon(radialFn, range, sign) {
+function buildSidePolygon(radialFn, range, sign, crestLift) {
   const samples = 140;
+  const positions = sampleRange(range, samples);
   const outer = [];
   const inner = [];
   let previous = null;
 
   for (let index = 0; index <= samples; index++) {
-    const u = range.min + ((range.max - range.min) * index) / samples;
+    const u = positions[index];
     let radial = radialFn(u);
     if (!radial) {
       radial =
@@ -256,14 +319,16 @@ function buildSidePolygon(radialFn, range, sign) {
     previous = radial;
     const outerRadius = radial.outer < 1e-5 ? 0 : radial.outer;
     const innerRadius = radial.inner < 1e-5 ? 0 : radial.inner;
-    outer.push({ u, v: sign * outerRadius });
-    inner.push({ u, v: sign * innerRadius });
+    const outerU = crestLift ? crestLift(u, outerRadius) : u;
+    const innerU = crestLift ? crestLift(u, innerRadius) : u;
+    outer.push({ u: outerU, v: sign * outerRadius });
+    inner.push({ u: innerU, v: sign * innerRadius });
   }
 
   return [...outer, ...inner.reverse()];
 }
 
-function buildContours(radialFn, range, startAngle, createLine) {
+function buildContours(radialFn, range, startAngle, createLine, crestLift) {
   const lines = [];
   const span = Math.max(range.max - range.min, 1e-8);
   let hasInner = false;
@@ -276,6 +341,21 @@ function buildContours(radialFn, range, startAngle, createLine) {
     }
   }
 
+  // Radii depend on u only, so sample them once and reuse the values for
+  // every meridian instead of re-evaluating the polygon cross-sections.
+  const meridianSamples = [];
+  const meridianUs = sampleRange(range, CONTOUR_MERIDIAN_STEPS);
+  for (let step = 0; step <= CONTOUR_MERIDIAN_STEPS; step++) {
+    const u = meridianUs[step];
+    const radial = radialFn(u);
+    if (!radial) continue;
+    meridianSamples.push({
+      u,
+      outer: radial.outer < 1e-5 ? 0 : radial.outer,
+      inner: radial.inner < 1e-5 ? 0 : radial.inner,
+    });
+  }
+
   for (let index = 0; index < CONTOUR_MERIDIANS; index++) {
     const relative = (index / CONTOUR_MERIDIANS) * TAU;
     const phi = startAngle + relative;
@@ -283,34 +363,34 @@ function buildContours(radialFn, range, startAngle, createLine) {
     const sin = Math.sin(phi);
     const outerPoints = [];
     const innerPoints = [];
-    for (let step = 0; step <= 72; step++) {
-      const u = range.min + (span * step) / 72;
-      const radial = radialFn(u);
-      if (!radial) continue;
-      const outer = radial.outer < 1e-5 ? 0 : radial.outer;
-      const inner = radial.inner < 1e-5 ? 0 : radial.inner;
-      outerPoints.push(new THREE.Vector3(u, outer * cos, outer * sin));
-      if (hasInner) {
-        innerPoints.push(new THREE.Vector3(u, inner * cos, inner * sin));
-      }
-    }
-    if (outerPoints.length > 1) {
-      lines.push(
-        createLine(
-          new THREE.BufferGeometry().setFromPoints(outerPoints),
-          "meridian",
-          relative,
+    for (const sample of meridianSamples) {
+      const outerU = crestLift
+        ? crestLift(sample.u, sample.outer)
+        : sample.u;
+      outerPoints.push(
+        new THREE.Vector3(
+          outerU,
+          sample.outer * cos,
+          sample.outer * sin,
         ),
       );
       if (hasInner) {
-        lines.push(
-          createLine(
-            new THREE.BufferGeometry().setFromPoints(innerPoints),
-            "meridian",
-            relative,
-            true,
+        const innerU = crestLift
+          ? crestLift(sample.u, sample.inner)
+          : sample.u;
+        innerPoints.push(
+          new THREE.Vector3(
+            innerU,
+            sample.inner * cos,
+            sample.inner * sin,
           ),
         );
+      }
+    }
+    if (outerPoints.length > 1) {
+      lines.push(createLine(outerPoints, "meridian", relative));
+      if (hasInner) {
+        lines.push(createLine(innerPoints, "meridian", relative, true));
       }
     }
   }
@@ -322,33 +402,26 @@ function buildContours(radialFn, range, startAngle, createLine) {
     if (!radial || radial.outer < 1e-5) continue;
     const outerPoints = [];
     const innerPoints = [];
+    const outerU = crestLift ? crestLift(u, radial.outer) : u;
+    const innerU = crestLift ? crestLift(u, radial.inner) : u;
     for (let step = 0; step <= CONTOUR_SEGMENTS; step++) {
       const phi = startAngle + (step / CONTOUR_SEGMENTS) * TAU;
       const cos = Math.cos(phi);
       const sin = Math.sin(phi);
       outerPoints.push(
-        new THREE.Vector3(u, radial.outer * cos, radial.outer * sin),
+        new THREE.Vector3(outerU, radial.outer * cos, radial.outer * sin),
       );
       if (hasInner && radial.inner > 1e-5) {
         innerPoints.push(
-          new THREE.Vector3(u, radial.inner * cos, radial.inner * sin),
+          new THREE.Vector3(innerU, radial.inner * cos, radial.inner * sin),
         );
       }
     }
-    const outerLine = createLine(
-      new THREE.BufferGeometry().setFromPoints(outerPoints),
-      "ring",
-      0,
-    );
+    const outerLine = createLine(outerPoints, "ring", 0);
     outerLine.userData.segments = CONTOUR_SEGMENTS;
     lines.push(outerLine);
     if (innerPoints.length > 1) {
-      const innerLine = createLine(
-        new THREE.BufferGeometry().setFromPoints(innerPoints),
-        "ring",
-        0,
-        true,
-      );
+      const innerLine = createLine(innerPoints, "ring", 0, true);
       innerLine.userData.segments = CONTOUR_SEGMENTS;
       lines.push(innerLine);
     }
@@ -432,35 +505,46 @@ export function createRevolvedSolid(model) {
 
   const outerMaterial = new THREE.MeshPhysicalMaterial({
     color: 0x0d8f83,
-    metalness: 0.14,
-    roughness: 0.32,
-    clearcoat: 0.4,
-    clearcoatRoughness: 0.22,
+    metalness: 0.1,
+    roughness: 0.42,
+    clearcoat: 0.24,
+    clearcoatRoughness: 0.36,
     transparent: true,
     opacity: 0.98,
     side: THREE.DoubleSide,
-    envMapIntensity: 0.55,
+    envMapIntensity: 0.5,
   });
 
   const innerMaterial = new THREE.MeshPhysicalMaterial({
-    color: 0x064747,
-    metalness: 0.18,
-    roughness: 0.42,
-    clearcoat: 0.18,
-    clearcoatRoughness: 0.3,
+    color: 0x11867c,
+    metalness: 0.05,
+    roughness: 0.6,
+    clearcoat: 0.05,
+    clearcoatRoughness: 0.5,
     transparent: true,
     opacity: 0.98,
     side: THREE.DoubleSide,
-    envMapIntensity: 0.45,
+    envMapIntensity: 0.3,
+    emissive: 0x07433d,
+    emissiveIntensity: 1.05,
   });
 
-  const capMaterial = new THREE.MeshBasicMaterial({
-    color: 0x0a5a56,
+  // The caps use the same lit shading as the inner wall. An unlit basic
+  // material made a visible black disk where the bottom cap shows through the
+  // opening of an open-topped solid.
+  const capMaterial = new THREE.MeshPhysicalMaterial({
+    color: 0x11867c,
+    metalness: 0.04,
+    roughness: 0.64,
+    clearcoat: 0.03,
+    clearcoatRoughness: 0.55,
     transparent: true,
     opacity: 0.98,
     side: THREE.DoubleSide,
     depthWrite: true,
-    toneMapped: false,
+    envMapIntensity: 0.26,
+    emissive: 0x07433d,
+    emissiveIntensity: 1.05,
   });
 
   const cutMaterial = new THREE.MeshBasicMaterial({
@@ -479,12 +563,23 @@ export function createRevolvedSolid(model) {
     depthWrite: false,
   });
 
-  const contourMaterial = new THREE.LineBasicMaterial({
+  const contourMaterial = new LineMaterial({
     color: 0x8cebdc,
+    linewidth: 1.15,
+    worldUnits: false,
     transparent: true,
     opacity: 0.16,
     depthWrite: false,
+    side: THREE.DoubleSide,
   });
+  // LineMaterial normally extends every segment by a round cap. On dense
+  // contours those overlapping caps make the line width ripple at every joint.
+  // Butt-jointed segments are visually continuous at this sampling density.
+  contourMaterial.vertexShader = contourMaterial.vertexShader.replace(
+    /if \( position\.y < 0\.0 \) \{\s*offset \+= - dir;\s*\} else if \( position\.y > 1\.0 \) \{\s*offset \+= dir;\s*\}/,
+    "",
+  );
+  contourMaterial.resolution.set(1, 1);
 
   const surfaces = [];
   const caps = [];
@@ -493,22 +588,39 @@ export function createRevolvedSolid(model) {
   const contours = [];
   let maxInner = 0;
 
-  function addContours(radialFn, range, startAngle, rep, hideWhenFull) {
+  function addContours(
+    radialFn,
+    range,
+    startAngle,
+    rep,
+    hideWhenFull,
+    crestLift,
+  ) {
     const created = buildContours(
       radialFn,
       range,
       startAngle,
-      (geometry, kind, relativeAngle, inner = false) => {
-        const line = new THREE.Line(geometry, contourMaterial);
+      (points, kind, relativeAngle, inner = false) => {
+        const positions = [];
+        for (const point of points) {
+          positions.push(point.x, point.y, point.z);
+        }
+        const geometry = new LineGeometry();
+        geometry.setPositions(positions);
+        geometry.userData.segments = Math.max(0, points.length - 1);
+
+        const line = new Line2(geometry, contourMaterial);
         line.userData.kind = kind;
         line.userData.relativeAngle = relativeAngle;
         line.userData.inner = inner;
         line.userData.rep = rep;
         line.userData.hideWhenFull = hideWhenFull;
+        line.userData.skipTriangleCount = true;
         line.renderOrder = 1;
         group.add(line);
         return line;
       },
+      crestLift,
     );
     for (const line of created) {
       contours.push(line);
@@ -538,11 +650,13 @@ export function createRevolvedSolid(model) {
 
   function addTube(radialFn, range, startAngle, rep, hideWhenFull, options = {}) {
     const { cuts = true, caps: includeCaps = true } = options;
+    const crestLift = makeCrestLift(range, radialFn);
     const outerGeometry = buildSurfaceGeometry(
       radialFn,
       range,
       startAngle,
       "outer",
+      crestLift,
     );
     const outer = new THREE.Mesh(outerGeometry, outerMaterial);
     outer.renderOrder = 1;
@@ -563,6 +677,7 @@ export function createRevolvedSolid(model) {
         range,
         startAngle,
         "inner",
+        crestLift,
       );
       const inner = new THREE.Mesh(innerGeometry, innerMaterial);
       inner.renderOrder = 1;
@@ -596,7 +711,12 @@ export function createRevolvedSolid(model) {
     }
 
     if (cuts) {
-      const polygon = buildSidePolygon(radialFn, range, startAngle === 0 ? 1 : -1);
+      const polygon = buildSidePolygon(
+        radialFn,
+        range,
+        startAngle === 0 ? 1 : -1,
+        crestLift,
+      );
       const cutGeometry = buildPolygonGeometry(polygon);
       if (cutGeometry) {
         const cutStart = new THREE.Mesh(cutGeometry, cutMaterial);
@@ -624,7 +744,14 @@ export function createRevolvedSolid(model) {
       }
     }
 
-    addContours(radialFn, range, startAngle, rep, hideWhenFull);
+    addContours(
+      radialFn,
+      range,
+      startAngle,
+      rep,
+      hideWhenFull,
+      crestLift,
+    );
   }
 
   for (const cell of mergeCellsForMesh(model.cells)) {
@@ -747,16 +874,18 @@ export function createRevolvedSolid(model) {
       const hiddenByRepresentation =
         (line.userData.rep === "union" && !full) ||
         (line.userData.hideWhenFull && full);
-      if (hiddenByRepresentation || (line.userData.inner && currentMode === "solid")) {
+      if (currentMode === "solid" || hiddenByRepresentation) {
         line.visible = false;
         continue;
       }
       if (line.userData.kind === "ring") {
         const segments = line.userData.segments || CONTOUR_SEGMENTS;
-        const count =
-          1 + Math.min(segments, Math.ceil((lastSweep / TAU) * segments));
-        line.geometry.setDrawRange(0, count);
-        line.visible = count > 1;
+        const count = Math.min(
+          segments,
+          Math.ceil((lastSweep / TAU) * segments),
+        );
+        line.geometry.instanceCount = count;
+        line.visible = count > 0;
       } else {
         line.visible =
           lastSweep > 0.002 &&
@@ -792,15 +921,20 @@ export function createRevolvedSolid(model) {
     cutMaterial.needsUpdate = true;
 
     if (wire) {
-      contourMaterial.color.setHex(0x9af4e4);
-      contourMaterial.opacity = 0.52;
+      contourMaterial.color.setHex(0xcfe9e5);
+      contourMaterial.opacity = 1;
+      contourMaterial.linewidth = 1;
     } else if (xray) {
-      contourMaterial.color.setHex(0xa4fff0);
-      contourMaterial.opacity = 0.28;
+      contourMaterial.color.setHex(0xa8f5e9);
+      contourMaterial.opacity = 0.3;
+      contourMaterial.linewidth = 1.05;
     } else {
-      contourMaterial.color.setHex(0x8cebdc);
-      contourMaterial.opacity = 0.15;
+      contourMaterial.color.setHex(0xa8f5e9);
+      contourMaterial.opacity = 0.16;
+      contourMaterial.linewidth = 1.05;
     }
+    contourMaterial.transparent = !wire;
+    contourMaterial.depthTest = true;
     contourMaterial.needsUpdate = true;
 
     syncVisibility();
@@ -818,6 +952,12 @@ export function createRevolvedSolid(model) {
     group,
     updateSweep,
     applyMode,
+    setResolution(width, height) {
+      contourMaterial.resolution.set(
+        Math.max(1, width),
+        Math.max(1, height),
+      );
+    },
     getSweep: () => lastSweep,
     getMode: () => currentMode,
     maxInner,

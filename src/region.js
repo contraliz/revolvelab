@@ -15,8 +15,6 @@ import {
 const SEARCH_SAMPLES = 1800;
 const ROOT_SAMPLES = 2400;
 const POLYGON_SAMPLES = 640;
-const VOLUME_SLICES = 2400;
-const EPS = 1e-9;
 
 export class RegionError extends Error {
   constructor(message, lineId = null) {
@@ -967,6 +965,25 @@ function radialMeasure(intervals) {
 
 function cellLocalIntervalsAtU(cell, axis, u) {
   const polygon = polygonLocal(cell, axis);
+  const onLine = 1e-9 * Math.max(1, Math.abs(u));
+
+  // A horizontal sweep that just touches a local extremum is a tangency, not
+  // an inside/outside change. Removing that point keeps the two lobes joined
+  // at a waist instead of losing one of them.
+  const tangentValues = [];
+  for (let index = 0; index < polygon.length; index++) {
+    const point = polygon[index];
+    if (Math.abs(point.u - u) > onLine) continue;
+    const previous = polygon[(index + polygon.length - 1) % polygon.length];
+    const next = polygon[(index + 1) % polygon.length];
+    if (
+      (previous.u < u - onLine && next.u < u - onLine) ||
+      (previous.u > u + onLine && next.u > u + onLine)
+    ) {
+      tangentValues.push(point.v);
+    }
+  }
+
   const values = [];
   for (let index = 0; index < polygon.length; index++) {
     const current = polygon[index];
@@ -985,6 +1002,14 @@ function cellLocalIntervalsAtU(cell, axis, u) {
   values.sort((a, b) => a - b);
   const deduped = [];
   for (const value of values) {
+    if (
+      tangentValues.some(
+        (tangent) =>
+          Math.abs(value - tangent) <= 1e-7 * Math.max(1, Math.abs(tangent)),
+      )
+    ) {
+      continue;
+    }
     if (deduped.length === 0 || Math.abs(value - deduped.at(-1)) > 1e-7) {
       deduped.push(value);
     }
@@ -993,6 +1018,18 @@ function cellLocalIntervalsAtU(cell, axis, u) {
   // A slice tangent to the polygon has one crossing rather than two. Keep it
   // as a zero-width interval: at a rim this preserves the rim radius instead
   // of collapsing the surface to the rotation axis.
+  if (deduped.length === 0 && tangentValues.length > 0) {
+    const unique = [];
+    for (const value of [...tangentValues].sort((a, b) => a - b)) {
+      if (
+        unique.length === 0 ||
+        Math.abs(value - unique.at(-1)) > 1e-7 * Math.max(1, Math.abs(value))
+      ) {
+        unique.push(value);
+      }
+    }
+    return unique.map((value) => [value, value]);
+  }
   if (deduped.length === 1) {
     return [[deduped[0], deduped[0]]];
   }
@@ -1060,7 +1097,7 @@ export function cellSideRadialIntervalAt(cell, axis, u, sign) {
       outer = -lower;
     }
     if (outer < 1e-9) return null;
-    return { inner, outer };
+    return { inner, outer, bands: [[inner, outer]] };
   }
 
   const localIntervals = cellLocalIntervalsAtU(cell, axis, u);
@@ -1080,7 +1117,11 @@ export function cellSideRadialIntervalAt(cell, axis, u, sign) {
   }
   const union = intervalUnion(radial);
   if (union.length === 0) return null;
-  return { inner: union[0][0], outer: union.at(-1)[1] };
+  return {
+    inner: union[0][0],
+    outer: union.at(-1)[1],
+    bands: union,
+  };
 }
 
 export function cellPolygonLocal(cell, axis) {
@@ -1131,23 +1172,15 @@ function integrateHorizontal(cells, axis) {
   return Math.PI * total;
 }
 
-function integrateWithSlices(fn, a, b, slices = VOLUME_SLICES) {
-  const count = slices % 2 === 0 ? slices : slices + 1;
-  const step = (b - a) / count;
-  let sum = fn(a) + fn(b);
-  for (let index = 1; index < count; index++) {
-    sum += (index % 2 === 1 ? 4 : 2) * fn(a + index * step);
-  }
-  return (step / 3) * sum;
-}
-
 function integrateAlongAxis(cells, axis) {
   let min = Infinity;
   let max = -Infinity;
+  const events = [];
   for (const cell of cells) {
     const range = cellURange(cell, axis);
     min = Math.min(min, range.min);
     max = Math.max(max, range.max);
+    events.push(range.min, range.max);
   }
   if (!Number.isFinite(min) || !Number.isFinite(max) || max - min < 1e-9) {
     return 0;
@@ -1166,7 +1199,27 @@ function integrateAlongAxis(cells, axis) {
     return radialMeasure(intervals);
   };
 
-  return Math.PI * integrateWithSlices(measureAt, min, max);
+  // Adjacent cells can meet at a shared u where the cross-section changes
+  // abruptly (two stacked annuli become one disk, for example). Integrating
+  // straight across that seam with a fixed grid skews the volume, so break
+  // the interval at every cell endpoint.
+  const breaks = dedupeEvents(
+    events.filter((value) => value > min + 1e-9 && value < max - 1e-9),
+    1e-8,
+  );
+  let total = 0;
+  let start = min;
+  for (const end of [...breaks, max]) {
+    if (end - start > 1e-9) {
+      const value = integrate(measureAt, start, end, {
+        eps: 1e-9,
+        maxDepth: 22,
+      });
+      if (Number.isFinite(value)) total += value;
+    }
+    start = end;
+  }
+  return Math.PI * total;
 }
 
 function cellSideOfAxis(cell, axis) {
@@ -1221,51 +1274,844 @@ function radialDisplay(text, kValue, side) {
   return `max(|${trimmed} − (${formatNumber(kValue, 6)})|)`;
 }
 
+/* -------------------------------------------------------------------------- */
+/* Symbolic radii for vertical rotation lines                                 */
+/* -------------------------------------------------------------------------- */
+
+const SYMBOLIC_PRECEDENCE = {
+  "+": 1,
+  "-": 1,
+  "*": 2,
+  "/": 2,
+  "^": 3,
+};
+
+function displayNumber(value) {
+  if (!Number.isFinite(value)) return "—";
+  if (Math.abs(value - Math.E) <= 1e-9) return value < 0 ? "−e" : "e";
+  if (Math.abs(value + Math.E) <= 1e-9) return "−e";
+  const exact = formatExactNumber(value, {
+    maxDenominator: 1000,
+    tolerance: 1e-9,
+  });
+  if (exact) return exact;
+  return formatNumber(value, 8);
+}
+
+function displayExpression(node, parentPrecedence = 0, variableName = "u") {
+  if (!node) return "";
+  if (node.type === "number") return displayNumber(node.value);
+  if (node.type === "variable") {
+    return node.name === "u" ? variableName : node.name;
+  }
+  if (node.type === "unary") {
+    const body = displayExpression(node.value, 2, variableName);
+    const text = `-${body}`;
+    return 2 < parentPrecedence ? `(${text})` : text;
+  }
+  if (node.type === "binary") {
+    const precedence = SYMBOLIC_PRECEDENCE[node.op] ?? 2;
+    const left = displayExpression(node.left, precedence, variableName);
+    let right;
+    if (node.op === "^") {
+      right = displayExpression(node.right, precedence, variableName);
+      const integerExponent =
+        node.right?.type === "number" && Number.isInteger(node.right.value);
+      if (!integerExponent) right = `(${right})`;
+    } else {
+      right = displayExpression(
+        node.right,
+        precedence + (node.op === "-" || node.op === "/" ? 1 : 0),
+        variableName,
+      );
+    }
+    const text = `${left}${node.op}${right}`;
+    return precedence < parentPrecedence ? `(${text})` : text;
+  }
+  if (node.type === "call") {
+    const name = node.name === "cbrt" ? "cbrt" : node.name;
+    const args = (node.args || []).map((argument) =>
+      displayExpression(argument, 0, variableName),
+    );
+    return `${name}(${args.join(", ")})`;
+  }
+  return "";
+}
+
+function symbolicNumber(value) {
+  return { type: "number", value };
+}
+
+function symbolicVariable(name) {
+  return { type: "variable", name };
+}
+
+function symbolicUnary(value) {
+  return simplifySymbolic({ type: "unary", op: "-", value });
+}
+
+function symbolicBinary(op, left, right) {
+  return simplifySymbolic({ type: "binary", op, left, right });
+}
+
+function symbolicCall(name, args) {
+  return { type: "call", name, args };
+}
+
+function symbolicValue(node) {
+  if (!node || node.type !== "number" || !Number.isFinite(node.value)) {
+    return null;
+  }
+  return node.value;
+}
+
+function evaluateSymbolic(node, u) {
+  if (!node) return Number.NaN;
+  if (node.type === "number") return node.value;
+  if (node.type === "variable") return node.name === "u" ? u : Number.NaN;
+  if (node.type === "unary") return -evaluateSymbolic(node.value, u);
+  if (node.type === "binary") {
+    const left = evaluateSymbolic(node.left, u);
+    const right = evaluateSymbolic(node.right, u);
+    switch (node.op) {
+      case "+":
+        return left + right;
+      case "-":
+        return left - right;
+      case "*":
+        return left * right;
+      case "/":
+        return left / right;
+      case "^":
+        return Math.pow(left, right);
+      default:
+        return Number.NaN;
+    }
+  }
+  if (node.type === "call") {
+    const args = node.args.map((argument) => evaluateSymbolic(argument, u));
+    switch (node.name) {
+      case "sqrt":
+        return Math.sqrt(args[0]);
+      case "cbrt":
+        return Math.cbrt(args[0]);
+      case "exp":
+        return Math.exp(args[0]);
+      case "ln":
+        return Math.log(args[0]);
+      case "abs":
+        return Math.abs(args[0]);
+      default:
+        return Number.NaN;
+    }
+  }
+  return Number.NaN;
+}
+
+function simplifySymbolic(node) {
+  if (!node) return node;
+  if (node.type === "unary") {
+    const value = simplifySymbolic(node.value);
+    if (value.type === "number") return symbolicNumber(-value.value);
+    if (value.type === "unary") return value.value;
+    if (value.type === "binary" && (value.op === "+" || value.op === "-")) {
+      return simplifySymbolic({
+        type: "binary",
+        op: value.op === "+" ? "-" : "+",
+        left: symbolicUnary(value.left),
+        right: value.right,
+      });
+    }
+    return { type: "unary", op: "-", value };
+  }
+  if (node.type !== "binary") return node;
+
+  const left = simplifySymbolic(node.left);
+  const right = simplifySymbolic(node.right);
+  const a = symbolicValue(left);
+  const b = symbolicValue(right);
+  if (a !== null && b !== null) {
+    let value = null;
+    switch (node.op) {
+      case "+":
+        value = a + b;
+        break;
+      case "-":
+        value = a - b;
+        break;
+      case "*":
+        value = a * b;
+        break;
+      case "/":
+        value = b === 0 ? null : a / b;
+        break;
+      case "^":
+        value = Math.pow(a, b);
+        break;
+      default:
+        break;
+    }
+    if (value !== null && Number.isFinite(value)) {
+      return symbolicNumber(value);
+    }
+    return { type: "binary", op: node.op, left, right };
+  }
+
+  if (node.op === "+") {
+    if (a === 0) return right;
+    if (b === 0) return left;
+    if (right.type === "unary") {
+      return simplifySymbolic({ type: "binary", op: "-", left, right: right.value });
+    }
+    if (b !== null && b < 0) {
+      return simplifySymbolic({
+        type: "binary",
+        op: "-",
+        left,
+        right: symbolicNumber(-b),
+      });
+    }
+    if (left.type === "unary" && right.type === "number") {
+      return simplifySymbolic({
+        type: "binary",
+        op: "-",
+        left: right,
+        right: left.value,
+      });
+    }
+  } else if (node.op === "-") {
+    if (b === 0) return left;
+    if (a === 0) return simplifySymbolic({ type: "unary", op: "-", value: right });
+    if (right.type === "unary") {
+      return simplifySymbolic({ type: "binary", op: "+", left, right: right.value });
+    }
+    if (b !== null && b < 0) {
+      return simplifySymbolic({
+        type: "binary",
+        op: "+",
+        left,
+        right: symbolicNumber(-b),
+      });
+    }
+  } else if (node.op === "*") {
+    if (a === 0 || b === 0) return symbolicNumber(0);
+    if (a === 1) return right;
+    if (b === 1) return left;
+    if (a === -1) return simplifySymbolic({ type: "unary", op: "-", value: right });
+    if (b === -1) return simplifySymbolic({ type: "unary", op: "-", value: left });
+  } else if (node.op === "/") {
+    if (a === 0) return symbolicNumber(0);
+    if (b === 1) return left;
+  } else if (node.op === "^") {
+    if (b === 0) return symbolicNumber(1);
+    if (b === 1) return left;
+    if (a === 1) return symbolicNumber(1);
+  }
+
+  return { type: "binary", op: node.op, left, right };
+}
+
+function symbolicExponentRoot(rhs, reciprocal) {
+  if (Math.abs(reciprocal - 2) < 1e-9) {
+    return symbolicBinary("^", rhs, symbolicNumber(2));
+  }
+  if (Math.abs(reciprocal - 3) < 1e-9) {
+    return symbolicBinary("^", rhs, symbolicNumber(3));
+  }
+  if (Math.abs(reciprocal - 0.5) < 1e-9) {
+    return symbolicCall("sqrt", [rhs]);
+  }
+  if (Math.abs(reciprocal - 1 / 3) < 1e-9) {
+    return symbolicCall("cbrt", [rhs]);
+  }
+  if (Math.abs(reciprocal + 1) < 1e-9) {
+    return symbolicBinary("/", symbolicNumber(1), rhs);
+  }
+  return symbolicBinary("^", rhs, symbolicNumber(reciprocal));
+}
+
+/**
+ * Solve a boundary y = f(x) for x in terms of u. Only the common textbook
+ * forms are supported: linear, powers, roots, exp, and ln, including nested
+ * combinations such as sqrt(x - 1) + 2. A null result leaves the integral in
+ * its generic R(u)/r(u) form rather than inventing an incorrect inverse.
+ */
+function invertExpression(node, rhs, depth = 0) {
+  if (!node || depth > 12 || !usesVariable(node, "x")) return [];
+  if (node.type === "variable") {
+    return node.name === "x" ? [rhs] : [];
+  }
+  if (node.type === "unary") {
+    return invertExpression(
+      node.value,
+      symbolicBinary("-", symbolicNumber(0), rhs),
+      depth + 1,
+    );
+  }
+  if (node.type === "binary") {
+    const leftHas = usesVariable(node.left, "x");
+    const rightHas = usesVariable(node.right, "x");
+    if (leftHas === rightHas) return [];
+
+    if (node.op === "+") {
+      const next = leftHas
+        ? symbolicBinary("-", rhs, node.right)
+        : symbolicBinary("-", rhs, node.left);
+      return invertExpression(leftHas ? node.left : node.right, next, depth + 1);
+    }
+    if (node.op === "-") {
+      if (leftHas) {
+        return invertExpression(
+          node.left,
+          symbolicBinary("+", rhs, node.right),
+          depth + 1,
+        );
+      }
+      return invertExpression(
+        node.right,
+        symbolicBinary("-", node.left, rhs),
+        depth + 1,
+      );
+    }
+    if (node.op === "*") {
+      const divisor = leftHas ? node.right : node.left;
+      return invertExpression(
+        leftHas ? node.left : node.right,
+        symbolicBinary("/", rhs, divisor),
+        depth + 1,
+      );
+    }
+    if (node.op === "/") {
+      if (leftHas) {
+        return invertExpression(
+          node.left,
+          symbolicBinary("*", rhs, node.right),
+          depth + 1,
+        );
+      }
+      return invertExpression(
+        node.right,
+        symbolicBinary("/", node.left, rhs),
+        depth + 1,
+      );
+    }
+    if (node.op === "^") {
+      if (rightHas) return [];
+      const exponent = evaluateSymbolic(node.right, 0);
+      if (!Number.isFinite(exponent) || Math.abs(exponent) < 1e-12) return [];
+      if (Math.abs(exponent - 1) < 1e-12) {
+        return invertExpression(node.left, rhs, depth + 1);
+      }
+      const reciprocal = 1 / exponent;
+      const root = symbolicExponentRoot(rhs, reciprocal);
+      const results = invertExpression(node.left, root, depth + 1);
+      if (Number.isInteger(exponent) && Math.abs(exponent % 2) === 0) {
+        const negativeRoot =
+          Math.abs(reciprocal - 0.5) < 1e-9
+            ? symbolicUnary(symbolicCall("sqrt", [rhs]))
+            : Math.abs(reciprocal - 1 / 3) < 1e-9
+              ? symbolicUnary(symbolicCall("cbrt", [rhs]))
+              : symbolicUnary(
+                  symbolicBinary("^", rhs, symbolicNumber(reciprocal)),
+                );
+        results.push(...invertExpression(node.left, negativeRoot, depth + 1));
+      }
+      return results;
+    }
+    return [];
+  }
+  if (node.type === "call" && node.args?.length === 1) {
+    const argument = node.args[0];
+    if (node.name === "sqrt") {
+      return invertExpression(
+        argument,
+        symbolicBinary("^", rhs, symbolicNumber(2)),
+        depth + 1,
+      );
+    }
+    if (node.name === "cbrt") {
+      return invertExpression(
+        argument,
+        symbolicBinary("^", rhs, symbolicNumber(3)),
+        depth + 1,
+      );
+    }
+    if (node.name === "exp") {
+      return invertExpression(argument, symbolicCall("ln", [rhs]), depth + 1);
+    }
+    if (node.name === "ln") {
+      return invertExpression(argument, symbolicCall("exp", [rhs]), depth + 1);
+    }
+    if (node.name === "abs") {
+      return [
+        ...invertExpression(argument, rhs, depth + 1),
+        ...invertExpression(
+          argument,
+          symbolicUnary(rhs),
+          depth + 1,
+        ),
+      ];
+    }
+  }
+  return [];
+}
+
+function affineCoefficients(node) {
+  if (!node) return null;
+  if (node.type === "number") {
+    return Number.isFinite(node.value) ? { slope: 0, intercept: node.value } : null;
+  }
+  if (node.type === "variable") {
+    return node.name === "x" ? { slope: 1, intercept: 0 } : null;
+  }
+  if (node.type === "unary") {
+    const inner = affineCoefficients(node.value);
+    return inner ? { slope: -inner.slope, intercept: -inner.intercept } : null;
+  }
+  if (node.type !== "binary") return null;
+  const left = affineCoefficients(node.left);
+  const right = affineCoefficients(node.right);
+  if (!left || !right) return null;
+  if (node.op === "+") {
+    return {
+      slope: left.slope + right.slope,
+      intercept: left.intercept + right.intercept,
+    };
+  }
+  if (node.op === "-") {
+    return {
+      slope: left.slope - right.slope,
+      intercept: left.intercept - right.intercept,
+    };
+  }
+  if (node.op === "*") {
+    if (Math.abs(left.slope) < 1e-12) {
+      return {
+        slope: right.slope * left.intercept,
+        intercept: right.intercept * left.intercept,
+      };
+    }
+    if (Math.abs(right.slope) < 1e-12) {
+      return {
+        slope: left.slope * right.intercept,
+        intercept: left.intercept * right.intercept,
+      };
+    }
+    return null;
+  }
+  if (node.op === "/") {
+    if (Math.abs(right.slope) > 1e-12 || Math.abs(right.intercept) < 1e-12) {
+      return null;
+    }
+    return {
+      slope: left.slope / right.intercept,
+      intercept: left.intercept / right.intercept,
+    };
+  }
+  if (node.op === "^") {
+    if (Math.abs(left.slope) < 1e-12) {
+      return {
+        slope: 0,
+        intercept: Math.pow(left.intercept, right.intercept),
+      };
+    }
+    if (Math.abs(right.slope) < 1e-12 && Math.abs(right.intercept - 1) < 1e-12) {
+      return left;
+    }
+  }
+  return null;
+}
+
+function affineExpression(slope, intercept) {
+  const m = Math.abs(slope) < 1e-12 ? 0 : slope;
+  const b = Math.abs(intercept) < 1e-12 ? 0 : intercept;
+  if (m === 0) return symbolicNumber(b);
+  const term =
+    Math.abs(m - 1) < 1e-12
+      ? symbolicVariable("u")
+      : symbolicBinary("*", symbolicNumber(m), symbolicVariable("u"));
+  return b === 0 ? term : symbolicBinary("+", term, symbolicNumber(b));
+}
+
+function linePerpendicularExpression(line, axis) {
+  if (!line.core) return null;
+  const coefficients = affineCoefficients(line.core.ast);
+  if (!coefficients) return null;
+  const { slope, intercept } = coefficients;
+  const denominator =
+    axis.direction.x + slope * axis.direction.y;
+  if (Math.abs(denominator) < 1e-12) return null;
+  const u0 =
+    -axis.point.x * axis.direction.x +
+    (intercept - axis.point.y) * axis.direction.y;
+  const v0 =
+    -axis.point.x * axis.normal.x +
+    (intercept - axis.point.y) * axis.normal.y;
+  const v1 = axis.normal.x + slope * axis.normal.y;
+  const lineSlope = v1 / denominator;
+  const lineIntercept = v0 - (v1 * u0) / denominator;
+  if (!Number.isFinite(lineSlope) || !Number.isFinite(lineIntercept)) {
+    return null;
+  }
+  return affineExpression(lineSlope, lineIntercept);
+}
+
+function closurePerpendicularExpression(closure, axis) {
+  const dy = axis.direction.y;
+  if (Math.abs(dy) < 1e-12) return null;
+  const base = closure - axis.point.x;
+  const slope = axis.normal.y / dy;
+  const intercept =
+    base * axis.normal.x - base * axis.direction.x * slope;
+  if (!Number.isFinite(slope) || !Number.isFinite(intercept)) return null;
+  return affineExpression(slope, intercept);
+}
+
+/**
+ * Candidate signed-perpendicular expressions for the two sides of a cell.
+ * Vertical axes invert the curve; oblique axes can still be explicit when the
+ * boundary is a straight line. Everything is checked against the cell polygon
+ * before it is shown, so an unsupported boundary simply falls back to R/r.
+ */
+function cellRadialCandidates(cell, axis) {
+  const candidates = [];
+  const add = (expression) => {
+    const text = displayExpression(expression);
+    if (!text) return;
+    if (candidates.some((entry) => entry.text === text)) return;
+    candidates.push({ expression, text });
+  };
+
+  if (axis.isVertical) {
+    for (const line of [cell.lowerLine, cell.upperLine]) {
+      if (!line.core) continue;
+      const inverses = invertExpression(line.core.ast, symbolicVariable("u"));
+      for (const expression of inverses) {
+        add(
+          symbolicBinary(
+            "*",
+            symbolicBinary(
+              "-",
+              expression,
+              symbolicNumber(axis.point.x),
+            ),
+            symbolicNumber(axis.normal.x),
+          ),
+        );
+      }
+    }
+    for (const closure of [cell.a, cell.b]) {
+      add(
+        symbolicBinary(
+          "*",
+          symbolicBinary(
+            "-",
+            symbolicNumber(closure),
+            symbolicNumber(axis.point.x),
+          ),
+          symbolicNumber(axis.normal.x),
+        ),
+      );
+    }
+    return candidates;
+  }
+
+  for (const line of [cell.lowerLine, cell.upperLine]) {
+    const expression = linePerpendicularExpression(line, axis);
+    if (expression) add(expression);
+  }
+  for (const closure of [cell.a, cell.b]) {
+    const expression = closurePerpendicularExpression(closure, axis);
+    if (expression) add(expression);
+  }
+  return candidates;
+}
+
+function localSliceInterval(cell, axis, u) {
+  const intervals = cellLocalIntervalsAtU(cell, axis, u);
+  if (intervals.length !== 1) return null;
+  const [lo, hi] = intervals[0];
+  const width = hi - lo;
+  if (!(width > 1e-9)) return null;
+  return { lo, hi, width };
+}
+
+function pickCandidate(candidates, u, target, width) {
+  let best = null;
+  for (const candidate of candidates) {
+    const value = evaluateSymbolic(candidate.expression, u);
+    if (!Number.isFinite(value)) continue;
+    const error = Math.abs(value - target);
+    if (!best || error < best.error) best = { ...candidate, error };
+  }
+  if (!best) return null;
+  return best.error <= Math.min(0.02, width * 0.35) ? best : null;
+}
+
+function tryRadialSegment(cell, axis, start, end, candidates, variableName) {
+  if (!(end - start > 1e-7)) return null;
+  const fractions = [0.15, 0.32, 0.5, 0.68, 0.85];
+  const samples = fractions.map((fraction) => {
+    const u = start + (end - start) * fraction;
+    return { u, interval: localSliceInterval(cell, axis, u) };
+  });
+  if (samples.some((sample) => !sample.interval)) return null;
+
+  const middle = samples[Math.floor(samples.length / 2)].interval;
+  const low = pickCandidate(candidates, samples[2].u, middle.lo, middle.width);
+  const high = pickCandidate(candidates, samples[2].u, middle.hi, middle.width);
+  if (!low || !high || low.text === high.text) return null;
+
+  const sideTolerance = 1e-9 * Math.max(1, Math.abs(middle.lo), Math.abs(middle.hi));
+  const positive = middle.hi > sideTolerance;
+  const negative = middle.lo < -sideTolerance;
+  if (positive && negative) return null;
+
+  const lowRadius = positive
+    ? low.expression
+    : symbolicUnary(low.expression);
+  const highRadius = positive
+    ? high.expression
+    : symbolicUnary(high.expression);
+
+  let outerExpression;
+  let innerExpression;
+  const lowValue = evaluateSymbolic(lowRadius, samples[2].u);
+  const highValue = evaluateSymbolic(highRadius, samples[2].u);
+  if (!Number.isFinite(lowValue) || !Number.isFinite(highValue)) return null;
+  if (lowValue >= highValue) {
+    outerExpression = lowRadius;
+    innerExpression = highRadius;
+  } else {
+    outerExpression = highRadius;
+    innerExpression = lowRadius;
+  }
+
+  for (const sample of samples) {
+    const { lo, hi, width } = sample.interval;
+    const tolerance = 1e-9 * Math.max(1, Math.abs(lo), Math.abs(hi));
+    if (lo < -tolerance && hi > tolerance) return null;
+    const actual = [Math.abs(lo), Math.abs(hi)].sort((a, b) => a - b);
+    const outer = evaluateSymbolic(outerExpression, sample.u);
+    const inner = evaluateSymbolic(innerExpression, sample.u);
+    const limit = Math.min(0.02, width * 0.35) + 1e-7;
+    if (
+      !Number.isFinite(outer) ||
+      !Number.isFinite(inner) ||
+      outer < -1e-9 ||
+      inner < -1e-9 ||
+      outer + 1e-9 < inner ||
+      Math.abs(outer - actual[1]) > limit ||
+      Math.abs(inner - actual[0]) > limit
+    ) {
+      return null;
+    }
+  }
+
+  return {
+    uStart: start,
+    uEnd: end,
+    outerText: displayExpression(outerExpression, 0, variableName),
+    innerText: displayExpression(innerExpression, 0, variableName),
+    outerExpression,
+    innerExpression,
+    explicit: true,
+  };
+}
+
+/**
+ * Express the perpendicular radii as real functions of the axis coordinate.
+ * A cell can switch which boundary is active at a corner (a right triangle
+ * revolved about its hypotenuse does this), so the display is split at the
+ * cell's own corner heights. If a piece cannot be matched to an explicit
+ * candidate the caller keeps the generic R/r notation.
+ */
+function perpendicularRadialSegments(cell, axis) {
+  if (!cell.polygon || cell.polygon.length < 3) return null;
+  const range = cellURange(cell, axis);
+  if (!range || !(range.max - range.min > 1e-7)) return null;
+  const candidates = cellRadialCandidates(cell, axis);
+  if (candidates.length < 2) return null;
+
+  const variableName = axis.isVertical ? "y" : "u";
+  const sampleCount = 24;
+  const samples = [];
+  for (let index = 0; index < sampleCount; index++) {
+    const fraction = 0.1 + (0.8 * (index + 0.5)) / sampleCount;
+    const u = range.min + (range.max - range.min) * fraction;
+    const interval = localSliceInterval(cell, axis, u);
+    if (!interval) continue;
+    const tolerance =
+      1e-9 * Math.max(1, Math.abs(interval.lo), Math.abs(interval.hi));
+    if (interval.lo < -tolerance && interval.hi > tolerance) continue;
+    const low = pickCandidate(
+      candidates,
+      u,
+      interval.lo,
+      interval.width * 1.4,
+    );
+    const high = pickCandidate(
+      candidates,
+      u,
+      interval.hi,
+      interval.width * 1.4,
+    );
+    if (!low || !high || low.text === high.text) continue;
+    samples.push({
+      u,
+      signature: `${low.text}|${high.text}`,
+    });
+  }
+
+  if (samples.length === 0) return null;
+
+  const runs = [];
+  for (const sample of samples) {
+    const previous = runs.at(-1);
+    if (!previous || previous.signature !== sample.signature) {
+      runs.push({ signature: sample.signature, first: sample, last: sample });
+    } else {
+      previous.last = sample;
+    }
+  }
+
+  if (runs.length === 1) {
+    const segment = tryRadialSegment(
+      cell,
+      axis,
+      range.min,
+      range.max,
+      candidates,
+      variableName,
+    );
+    return segment ? [segment] : null;
+  }
+
+  const xTolerance = 1e-7 * Math.max(1, Math.abs(cell.a), Math.abs(cell.b));
+  const corners = [];
+  for (const point of cell.polygon) {
+    if (
+      Math.abs(point.x - cell.a) <= xTolerance ||
+      Math.abs(point.x - cell.b) <= xTolerance
+    ) {
+      const u = axis.uOf(point.x, point.y);
+      if (u > range.min + 1e-8 && u < range.max - 1e-8) corners.push(u);
+    }
+  }
+  corners.sort((a, b) => a - b);
+
+  const splits = [];
+  for (let index = 0; index + 1 < runs.length; index++) {
+    const left = runs[index].last.u;
+    const right = runs[index + 1].first.u;
+    const middle = (left + right) / 2;
+    const inGap = corners.filter((u) => u > left + 1e-9 && u < right - 1e-9);
+    let split = middle;
+    if (inGap.length > 0) {
+      split = inGap.reduce((closest, u) =>
+        Math.abs(u - middle) < Math.abs(closest - middle) ? u : closest,
+      );
+    }
+    splits.push(split);
+  }
+
+  const edges = [range.min, ...splits, range.max];
+  const segments = [];
+  for (let index = 0; index + 1 < edges.length; index++) {
+    const segment = tryRadialSegment(
+      cell,
+      axis,
+      edges[index],
+      edges[index + 1],
+      candidates,
+      variableName,
+    );
+    if (!segment) return null;
+    segments.push(segment);
+  }
+  return segments.length > 0 ? segments : null;
+}
+
 function buildFormula(cells, axis, method, volume, exact) {
   const sides = cells.map((cell) => cellSideOfAxis(cell, axis));
   const horizontal = axis.isHorizontal;
-  const terms = cells.map((cell, index) => {
+  const sliceVariable = horizontal ? "x" : axis.isVertical ? "y" : "u";
+  const exactLimit = (value) => {
+    if (!Number.isFinite(value)) return false;
+    // Polygon sampling can leave a tiny positive value at a true zero cusp.
+    if (Math.abs(value) < 5e-4) return true;
+    return Boolean(
+      approximateFraction(value, {
+        maxDenominator: 2000,
+        tolerance: 1e-8,
+      }),
+    );
+  };
+  const terms = [];
+  const pushTerm = (cell, side, uStart, uEnd, radial) => {
+    terms.push({
+      a: cell.a,
+      b: cell.b,
+      uStart,
+      uEnd,
+      lowerText: cell.lowerLine.source,
+      upperText: cell.upperLine.source,
+      side,
+      outerText: radial ? radial.outerText : `R(${sliceVariable})`,
+      innerText: radial ? radial.innerText : `r(${sliceVariable})`,
+      explicitRadii: Boolean(radial?.explicit),
+      outerExpression: radial?.outerExpression ?? null,
+      innerExpression: radial?.innerExpression ?? null,
+      exactLimits:
+        Number.isFinite(uStart) &&
+        Number.isFinite(uEnd) &&
+        exactLimit(uStart) &&
+        exactLimit(uEnd),
+    });
+  };
+
+  for (let index = 0; index < cells.length; index++) {
+    const cell = cells[index];
     const side = sides[index];
-    const lowerText = cell.lowerLine.source;
-    const upperText = cell.upperLine.source;
-    let outerText;
-    let innerText;
     if (horizontal) {
       const kValue = axis.point.y;
       const k = formatNumber(kValue, 6).replace("-", "−");
       const zeroAxis = Math.abs(kValue) < 1e-9;
+      let outerText;
+      let innerText;
       if (side === "above") {
-        outerText = radialDisplay(upperText, kValue, "above");
-        innerText = radialDisplay(lowerText, kValue, "above");
+        outerText = radialDisplay(cell.upperLine.source, kValue, "above");
+        innerText = radialDisplay(cell.lowerLine.source, kValue, "above");
       } else if (side === "below") {
-        outerText = radialDisplay(lowerText, kValue, "below");
-        innerText = radialDisplay(upperText, kValue, "below");
+        outerText = radialDisplay(cell.lowerLine.source, kValue, "below");
+        innerText = radialDisplay(cell.upperLine.source, kValue, "below");
       } else {
         outerText = zeroAxis
-          ? `max(|${upperText}|, |${lowerText}|)`
-          : `max(|${upperText} − (${k})|, |${lowerText} − (${k})|)`;
+          ? `max(|${cell.upperLine.source}|, |${cell.lowerLine.source}|)`
+          : `max(|${cell.upperLine.source} − (${k})|, |${cell.lowerLine.source} − (${k})|)`;
         innerText = "0";
       }
       if (/^\(?0\)?$/.test(innerText.trim()) || /^\(?0\)?\s*[−-]\s*\(?0\)?$/.test(innerText.trim())) {
         innerText = "0";
       }
-    } else {
-      outerText = `R(u)`;
-      innerText = `r(u)`;
+      pushTerm(cell, side, null, null, {
+        outerText,
+        innerText,
+        explicit: false,
+      });
+      continue;
     }
-    const axisRange = horizontal ? null : cellURange(cell, axis);
-    return {
-      a: cell.a,
-      b: cell.b,
-      uStart: axisRange ? axisRange.min : null,
-      uEnd: axisRange ? axisRange.max : null,
-      lowerText,
-      upperText,
-      side,
-      outerText,
-      innerText,
-    };
-  });
+
+    const segments = perpendicularRadialSegments(cell, axis);
+    if (segments) {
+      for (const segment of segments) {
+        pushTerm(cell, side, segment.uStart, segment.uEnd, segment);
+      }
+    } else {
+      const range = cellURange(cell, axis);
+      pushTerm(cell, side, range.min, range.max, null);
+    }
+  }
 
   const note = horizontal
     ? method === "Disk method"
@@ -1279,6 +2125,7 @@ function buildFormula(cells, axis, method, volume, exact) {
     method,
     terms,
     note,
+    variable: sliceVariable,
     exact,
     volume,
   };
@@ -1404,7 +2251,6 @@ export function analyzeLines(inputs, axisText, options = {}) {
     method = hasInner ? "Washer method" : "Disk method";
   }
 
-  let exact = null;
   const exactCandidates = functionLines.every((line) => {
     if (line.polynomial) return true;
     return axis.isHorizontal && Math.abs(axis.point.y) < 1e-9 && line.squarePolynomial;
@@ -1416,6 +2262,52 @@ export function analyzeLines(inputs, axisText, options = {}) {
         tolerance: 1e-8,
       }),
     );
+  // Polygon samples can land a hair inside a cusp, so the slice limits may be
+  // 1e-4 instead of 0. Accept those as the exact rational endpoint they mean.
+  const displayRationalEndpoint = (value) =>
+    Boolean(
+      approximateFraction(value, {
+        maxDenominator: 2000,
+        tolerance: 1e-3,
+      }),
+    );
+  const exactLabel = (fraction) => ({
+    numerator: fraction.numerator,
+    denominator: fraction.denominator,
+    label:
+      fraction.denominator === 1
+        ? `${fraction.numerator}π`
+        : Math.abs(fraction.numerator) === 1
+          ? `${fraction.numerator < 0 ? "−" : ""}π/${fraction.denominator}`
+          : `${fraction.numerator}π/${fraction.denominator}`,
+  });
+  const piSurdLabel = (source) => {
+    const trimmed = String(source).trim();
+    if (!trimmed) return null;
+    let sign = "";
+    let body = trimmed;
+    if (body.startsWith("−") || body.startsWith("-")) {
+      sign = "−";
+      body = body.slice(1);
+    }
+    const insertPi = (part) => {
+      if (/^√/.test(part)) return `π${part}`;
+      if (/^\d+√/.test(part)) return part.replace(/^(\d+)(√.*)$/, "$1π$2");
+      if (/^\d+$/.test(part)) return `${part}π`;
+      return `π(${part})`;
+    };
+    const slash = body.lastIndexOf("/");
+    if (slash > 0) {
+      const numerator = body.slice(0, slash);
+      const denominator = body.slice(slash + 1);
+      return `${sign}${insertPi(numerator)}/${denominator}`;
+    }
+    return `${sign}${insertPi(body)}`;
+  };
+
+  const formula = buildFormula(cells, axis, method, volume, null);
+
+  let exact = null;
   if (
     axis.isHorizontal &&
     exactCandidates &&
@@ -1431,21 +2323,55 @@ export function analyzeLines(inputs, axisText, options = {}) {
       maxDenominator: 5000,
       tolerance: 1e-6,
     });
-    if (fraction) {
-      exact = {
-        numerator: fraction.numerator,
-        denominator: fraction.denominator,
-        label:
-          fraction.denominator === 1
-            ? `${fraction.numerator}π`
-            : Math.abs(fraction.numerator) === 1
-              ? `${fraction.numerator < 0 ? "−" : ""}π/${fraction.denominator}`
-              : `${fraction.numerator}π/${fraction.denominator}`,
-      };
+    if (fraction) exact = exactLabel(fraction);
+  }
+
+  if (!axis.isHorizontal && axis.isVertical) {
+    const symbolicTerms = formula.terms.every(
+      (term) =>
+        term.explicitRadii &&
+        term.outerExpression &&
+        term.innerExpression &&
+        term.exactLimits &&
+        isPolynomialIn(term.outerExpression, "u") &&
+        isPolynomialIn(term.innerExpression, "u") &&
+        displayRationalEndpoint(term.uStart) &&
+        displayRationalEndpoint(term.uEnd),
+    );
+    if (symbolicTerms) {
+      const fraction = approximateFraction(volume / Math.PI, {
+        maxDenominator: 5000,
+        tolerance: 1e-5,
+      });
+      if (fraction) exact = exactLabel(fraction);
     }
   }
 
-  const formula = buildFormula(cells, axis, method, volume, exact);
+  if (!exact) {
+    // Recognize simple radical coefficients too, such as the pi * sqrt(2) / 6
+    // volume of a right triangle revolved about its hypotenuse.
+    const surd = formatExactNumber(volume / Math.PI, {
+      maxDenominator: 200,
+      tolerance: axis.isHorizontal ? 1e-7 : 1e-6,
+      allowPi: false,
+      allowSqrt: true,
+    });
+    if (surd && surd.includes("√")) {
+      const radicands = [...surd.matchAll(/√(\d+)/g)].map((match) =>
+        Number(match[1]),
+      );
+      // Reject the large, accidental radicands the recognizer can produce when
+      // it fits a square to an irrational-looking numeric volume.
+      if (
+        radicands.length > 0 &&
+        radicands.every((value) => Number.isFinite(value) && value <= 200)
+      ) {
+        const label = piSurdLabel(surd);
+        if (label) exact = { label, expression: true };
+      }
+    }
+  }
+  formula.exact = exact;
 
   let xMin = Infinity;
   let xMax = -Infinity;
@@ -1460,14 +2386,12 @@ export function analyzeLines(inputs, axisText, options = {}) {
     }
   }
 
+  // A horizontal rotation line is part of the region's vertical extent, so
+  // show it. Other axes are drawn across the whole viewport and must not
+  // inflate the graph bounds with their far-away endpoints.
   if (axis.isHorizontal) {
     yMin = Math.min(yMin, axis.point.y);
     yMax = Math.max(yMax, axis.point.y);
-  } else {
-    const first = axis.pointAt(-window.span, 0);
-    const second = axis.pointAt(window.span, 0);
-    yMin = Math.min(yMin, first.y, second.y);
-    yMax = Math.max(yMax, first.y, second.y);
   }
 
   for (const value of verticalXs) {
@@ -1505,6 +2429,7 @@ export function prettyExpression(value) {
     .replace(/\bpi\b/g, "π")
     .replace(/\btau\b/g, "τ")
     .replace(/\bsqrt\s*\(/g, "√(")
+    .replace(/\bcbrt\s*\(/g, "∛(")
     .replace(/\*/g, " · ")
     .replace(/\^2\b/g, "²")
     .replace(/\^3\b/g, "³")

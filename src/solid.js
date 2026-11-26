@@ -3,6 +3,7 @@ import { Line2 } from "three/addons/lines/Line2.js";
 import { LineGeometry } from "three/addons/lines/LineGeometry.js";
 import { LineMaterial } from "three/addons/lines/LineMaterial.js";
 import {
+  cellPolygonLocal,
   cellRadialIntervalAt,
   cellSideRadialIntervalAt,
   cellURangeFor,
@@ -102,6 +103,241 @@ function radialAt(cell, axis, u) {
 
 function sideRadialAt(cell, axis, u, sign) {
   return cellSideRadialIntervalAt(cell, axis, u, sign);
+}
+
+function radialBands(radial) {
+  if (!radial) return [];
+  if (Array.isArray(radial.bands) && radial.bands.length > 0) {
+    return radial.bands.map(([inner, outer]) => ({
+      inner: Math.max(0, inner),
+      outer: Math.max(0, outer),
+    }));
+  }
+  return [{ inner: Math.max(0, radial.inner), outer: Math.max(0, radial.outer) }];
+}
+
+/**
+ * Sample every radial band along the axis. Textbook regions usually give one
+ * band, but a horizontal line through a curve can leave two disjoint lobes in
+ * one cell. Those need separate surfaces and separate profiles.
+ */
+function bandRows(radialFn, range) {
+  const segments = Math.max(
+    72,
+    Math.min(220, Math.round(segmentsForRange(range) * 1.5)),
+  );
+  const positions = sampleRange(range, segments);
+  return positions.map((u) => ({
+    u,
+    bands: radialBands(radialFn(u)),
+  }));
+}
+
+function bandsTouch(first, second) {
+  const overlap =
+    Math.min(first.outer, second.outer) -
+    Math.max(first.inner, second.inner);
+  if (overlap >= -1e-9) return true;
+  const gap = Math.max(
+    first.inner - second.outer,
+    second.inner - first.outer,
+  );
+  return gap <= 1e-5 * Math.max(1, first.outer, second.outer);
+}
+
+function matchBandRows(rows) {
+  const matches = [];
+  for (let index = 0; index + 1 < rows.length; index++) {
+    const pairs = [];
+    rows[index].bands.forEach((band, bandIndex) => {
+      rows[index + 1].bands.forEach((nextBand, nextIndex) => {
+        if (bandsTouch(band, nextBand)) pairs.push([bandIndex, nextIndex]);
+      });
+    });
+    matches.push(pairs);
+  }
+  return matches;
+}
+
+function buildBandSurfaceGeometry(rows, startAngle, which) {
+  const vertexCount = rows.reduce((total, row) => total + row.bands.length, 0);
+  if (vertexCount === 0) return null;
+
+  const offsets = [];
+  let running = 0;
+  for (const row of rows) {
+    offsets.push(running);
+    running += row.bands.length;
+  }
+
+  const matches = matchBandRows(rows);
+  const positions = [];
+  const indices = [];
+
+  for (let phase = 0; phase <= SEG_PHI; phase++) {
+    const phi = startAngle + (phase / SEG_PHI) * TAU;
+    const cos = Math.cos(phi);
+    const sin = Math.sin(phi);
+    for (let rowIndex = 0; rowIndex < rows.length; rowIndex++) {
+      const row = rows[rowIndex];
+      for (const band of row.bands) {
+        const radius = which === "outer" ? band.outer : band.inner;
+        positions.push(row.u, radius * cos, radius * sin);
+      }
+    }
+  }
+
+  let indicesPerPhase = 0;
+  for (let phase = 0; phase < SEG_PHI; phase++) {
+    const currentBase = phase * vertexCount;
+    const nextBase = (phase + 1) * vertexCount;
+    const start = indices.length;
+    for (let rowIndex = 0; rowIndex < matches.length; rowIndex++) {
+      for (const [firstIndex, secondIndex] of matches[rowIndex]) {
+        const a = currentBase + offsets[rowIndex] + firstIndex;
+        const b = nextBase + offsets[rowIndex] + firstIndex;
+        const c = currentBase + offsets[rowIndex + 1] + secondIndex;
+        const d = nextBase + offsets[rowIndex + 1] + secondIndex;
+        if (which === "outer") {
+          indices.push(a, b, c, b, d, c);
+        } else {
+          indices.push(a, c, b, b, c, d);
+        }
+      }
+    }
+    if (phase === 0) indicesPerPhase = indices.length - start;
+  }
+
+  if (indices.length === 0) return null;
+
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute(
+    "position",
+    new THREE.Float32BufferAttribute(positions, 3),
+  );
+  geometry.setIndex(indices);
+  geometry.computeVertexNormals();
+  geometry.computeBoundingSphere();
+  geometry.setDrawRange(0, 0);
+  geometry.userData.indicesPerPhase = indicesPerPhase;
+  geometry.userData.rows = rows;
+  return geometry;
+}
+
+function clipLocalPolygon(points, sign) {
+  if (!sign) return points.map((point) => ({ ...point }));
+  const result = [];
+  const epsilon = 1e-9;
+  for (let index = 0; index < points.length; index++) {
+    const current = points[index];
+    const next = points[(index + 1) % points.length];
+    const currentInside = sign * current.v >= -epsilon;
+    const nextInside = sign * next.v >= -epsilon;
+    if (currentInside) result.push({ u: current.u, v: current.v });
+    if (currentInside !== nextInside) {
+      const t = current.v / (current.v - next.v);
+      result.push({
+        u: current.u + (next.u - current.u) * t,
+        v: 0,
+      });
+    }
+  }
+  return result;
+}
+
+function buildBandContours(rows, startAngle, createLine) {
+  const lines = [];
+  const maxBands = rows.reduce(
+    (maximum, row) => Math.max(maximum, row.bands.length),
+    0,
+  );
+  if (maxBands === 0) return lines;
+
+  let hasInner = false;
+  for (const row of rows) {
+    for (const band of row.bands) {
+      if (band.inner > 1e-5) {
+        hasInner = true;
+        break;
+      }
+    }
+    if (hasInner) break;
+  }
+
+  for (let index = 0; index < CONTOUR_MERIDIANS; index++) {
+    const relative = (index / CONTOUR_MERIDIANS) * TAU;
+    const phi = startAngle + relative;
+    const cos = Math.cos(phi);
+    const sin = Math.sin(phi);
+    for (let bandIndex = 0; bandIndex < maxBands; bandIndex++) {
+      let outerPoints = [];
+      let innerPoints = [];
+      const flush = () => {
+        if (outerPoints.length > 1) {
+          lines.push(createLine(outerPoints, "meridian", relative));
+        }
+        if (hasInner && innerPoints.length > 1) {
+          lines.push(createLine(innerPoints, "meridian", relative, true));
+        }
+        outerPoints = [];
+        innerPoints = [];
+      };
+      for (const row of rows) {
+        const band = row.bands[bandIndex];
+        if (!band) {
+          flush();
+          continue;
+        }
+        outerPoints.push(
+          new THREE.Vector3(row.u, band.outer * cos, band.outer * sin),
+        );
+        if (hasInner) {
+          innerPoints.push(
+            new THREE.Vector3(row.u, band.inner * cos, band.inner * sin),
+          );
+        }
+      }
+      flush();
+    }
+  }
+
+  for (let index = 0; index < CONTOUR_RINGS; index++) {
+    const row =
+      rows[
+        Math.min(
+          rows.length - 1,
+          Math.round((0.055 + (index / (CONTOUR_RINGS - 1)) * 0.89) * (rows.length - 1)),
+        )
+      ];
+    for (const band of row.bands) {
+      if (band.outer < 1e-5) continue;
+      const outerPoints = [];
+      const innerPoints = [];
+      for (let step = 0; step <= CONTOUR_SEGMENTS; step++) {
+        const phi = startAngle + (step / CONTOUR_SEGMENTS) * TAU;
+        const cos = Math.cos(phi);
+        const sin = Math.sin(phi);
+        outerPoints.push(
+          new THREE.Vector3(row.u, band.outer * cos, band.outer * sin),
+        );
+        if (hasInner && band.inner > 1e-5) {
+          innerPoints.push(
+            new THREE.Vector3(row.u, band.inner * cos, band.inner * sin),
+          );
+        }
+      }
+      const outerLine = createLine(outerPoints, "ring", 0);
+      outerLine.userData.segments = CONTOUR_SEGMENTS;
+      lines.push(outerLine);
+      if (innerPoints.length > 1) {
+        const innerLine = createLine(innerPoints, "ring", 0, true);
+        innerLine.userData.segments = CONTOUR_SEGMENTS;
+        lines.push(innerLine);
+      }
+    }
+  }
+
+  return lines;
 }
 
 function buildSurfaceGeometry(radialFn, range, startAngle, which, crestLift) {
@@ -588,6 +824,34 @@ export function createRevolvedSolid(model) {
   const contours = [];
   let maxInner = 0;
 
+  function createContourLine(
+    points,
+    kind,
+    relativeAngle,
+    inner,
+    rep,
+    hideWhenFull,
+  ) {
+    const positions = [];
+    for (const point of points) {
+      positions.push(point.x, point.y, point.z);
+    }
+    const geometry = new LineGeometry();
+    geometry.setPositions(positions);
+    geometry.userData.segments = Math.max(0, points.length - 1);
+
+    const line = new Line2(geometry, contourMaterial);
+    line.userData.kind = kind;
+    line.userData.relativeAngle = relativeAngle;
+    line.userData.inner = inner;
+    line.userData.rep = rep;
+    line.userData.hideWhenFull = hideWhenFull;
+    line.userData.skipTriangleCount = true;
+    line.renderOrder = 1;
+    group.add(line);
+    return line;
+  }
+
   function addContours(
     radialFn,
     range,
@@ -600,26 +864,15 @@ export function createRevolvedSolid(model) {
       radialFn,
       range,
       startAngle,
-      (points, kind, relativeAngle, inner = false) => {
-        const positions = [];
-        for (const point of points) {
-          positions.push(point.x, point.y, point.z);
-        }
-        const geometry = new LineGeometry();
-        geometry.setPositions(positions);
-        geometry.userData.segments = Math.max(0, points.length - 1);
-
-        const line = new Line2(geometry, contourMaterial);
-        line.userData.kind = kind;
-        line.userData.relativeAngle = relativeAngle;
-        line.userData.inner = inner;
-        line.userData.rep = rep;
-        line.userData.hideWhenFull = hideWhenFull;
-        line.userData.skipTriangleCount = true;
-        line.renderOrder = 1;
-        group.add(line);
-        return line;
-      },
+      (points, kind, relativeAngle, inner = false) =>
+        createContourLine(
+          points,
+          kind,
+          relativeAngle,
+          inner,
+          rep,
+          hideWhenFull,
+        ),
       crestLift,
     );
     for (const line of created) {
@@ -648,8 +901,121 @@ export function createRevolvedSolid(model) {
     caps.push({ mesh, geometry, rep, hideWhenFull });
   }
 
+  function addComplexTube(rows, startAngle, rep, hideWhenFull, options = {}) {
+    const {
+      cuts = true,
+      caps: includeCaps = true,
+      cell = null,
+      axis = null,
+      clipSign = null,
+    } = options;
+
+    const outerGeometry = buildBandSurfaceGeometry(rows, startAngle, "outer");
+    if (outerGeometry) {
+      const outer = new THREE.Mesh(outerGeometry, outerMaterial);
+      outer.renderOrder = 1;
+      group.add(outer);
+      surfaces.push({
+        mesh: outer,
+        geometry: outerGeometry,
+        segmentsU: 0,
+        rep,
+        hideWhenFull,
+      });
+    }
+
+    let hasInner = false;
+    for (const row of rows) {
+      for (const band of row.bands) {
+        maxInner = Math.max(maxInner, band.inner);
+        if (band.inner > 1e-5) hasInner = true;
+      }
+    }
+    if (hasInner) {
+      const innerGeometry = buildBandSurfaceGeometry(rows, startAngle, "inner");
+      if (innerGeometry) {
+        const inner = new THREE.Mesh(innerGeometry, innerMaterial);
+        inner.renderOrder = 1;
+        group.add(inner);
+        surfaces.push({
+          mesh: inner,
+          geometry: innerGeometry,
+          segmentsU: 0,
+          rep,
+          hideWhenFull,
+        });
+      }
+    }
+
+    if (includeCaps) {
+      for (const [rowIndex, outward] of [
+        [0, -1],
+        [rows.length - 1, 1],
+      ]) {
+        const row = rows[rowIndex];
+        for (const band of row.bands) {
+          addCap(row.u, band, startAngle, outward, rep, hideWhenFull);
+        }
+      }
+    }
+
+    if (cuts && cell && axis) {
+      const polygon = clipLocalPolygon(cellPolygonLocal(cell, axis), clipSign);
+      const cutGeometry = buildPolygonGeometry(polygon);
+      if (cutGeometry) {
+        const cutStart = new THREE.Mesh(cutGeometry, cutMaterial);
+        const cutEnd = new THREE.Mesh(cutGeometry, cutMaterial);
+        cutStart.renderOrder = 2;
+        cutEnd.renderOrder = 2;
+        group.add(cutStart, cutEnd);
+        cutFaces.push({ start: cutStart, end: cutEnd, rep, hideWhenFull });
+
+        const outlineGeometry = buildOutlineGeometry(polygon);
+        if (outlineGeometry) {
+          const startOutline = new THREE.LineLoop(
+            outlineGeometry,
+            outlineMaterial,
+          );
+          const endOutline = new THREE.LineLoop(
+            outlineGeometry,
+            outlineMaterial.clone(),
+          );
+          startOutline.renderOrder = 3;
+          endOutline.renderOrder = 3;
+          group.add(startOutline, endOutline);
+          outlines.push({
+            start: startOutline,
+            end: endOutline,
+            rep,
+            hideWhenFull,
+          });
+        }
+      }
+    }
+
+    const created = buildBandContours(
+      rows,
+      startAngle,
+      (points, kind, relativeAngle, inner = false) =>
+        createContourLine(
+          points,
+          kind,
+          relativeAngle,
+          inner,
+          rep,
+          hideWhenFull,
+        ),
+    );
+    for (const line of created) contours.push(line);
+  }
+
   function addTube(radialFn, range, startAngle, rep, hideWhenFull, options = {}) {
     const { cuts = true, caps: includeCaps = true } = options;
+    const rows = bandRows(radialFn, range);
+    if (rows.some((row) => row.bands.length !== 1)) {
+      addComplexTube(rows, startAngle, rep, hideWhenFull, options);
+      return;
+    }
     const crestLift = makeCrestLift(range, radialFn);
     const outerGeometry = buildSurfaceGeometry(
       radialFn,
@@ -782,6 +1148,7 @@ export function createRevolvedSolid(model) {
           0,
           "side",
           true,
+          { cell, axis: model.axis, clipSign: 1 },
         );
       }
       if (negativeRange) {
@@ -791,6 +1158,7 @@ export function createRevolvedSolid(model) {
           Math.PI,
           "side",
           true,
+          { cell, axis: model.axis, clipSign: -1 },
         );
       }
     } else if (positiveRange) {
@@ -802,6 +1170,7 @@ export function createRevolvedSolid(model) {
         0,
         "side",
         false,
+        { cell, axis: model.axis, clipSign: 1 },
       );
     } else if (negativeRange) {
       addTube(
@@ -810,6 +1179,7 @@ export function createRevolvedSolid(model) {
         Math.PI,
         "side",
         false,
+        { cell, axis: model.axis, clipSign: -1 },
       );
     }
   }
@@ -833,7 +1203,10 @@ export function createRevolvedSolid(model) {
         surface.mesh.visible = false;
         continue;
       }
-      const count = usedSegments * surface.segmentsU * 6;
+      const perPhase =
+        surface.geometry.userData.indicesPerPhase ||
+        surface.segmentsU * 6;
+      const count = usedSegments * perPhase;
       surface.geometry.setDrawRange(0, count);
       surface.mesh.visible = count > 0;
     }

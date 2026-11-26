@@ -501,8 +501,9 @@ function escapeHtml(value) {
 function prettyMathHTML(value) {
   let text = escapeHtml(prettyExpression(value));
   text = text
-    .replace(/\^(\-?\d+)/g, "<sup>$1</sup>")
+    .replace(/\^((?:−|-)?\d+)/g, "<sup>$1</sup>")
     .replace(/sqrt\s*\(/g, "√(")
+    .replace(/cbrt\s*\(/g, "∛(")
     .replace(/\bpi\b/g, "π")
     .replace(/\btau\b/g, "τ")
     .replace(/\*/g, " · ");
@@ -835,14 +836,26 @@ function updateResults() {
   $("#methodBadge").textContent = model.method.toUpperCase();
 
   if (exact) {
-    $("#volumeNumerator").textContent =
-      exact.denominator === 1
-        ? `${exact.numerator}π`
-        : Math.abs(exact.numerator) === 1
-          ? `${exact.numerator < 0 ? "−" : ""}π`
-          : `${exact.numerator}π`;
-    $("#volumeDenominator").textContent = String(exact.denominator);
-    $("#volumeFraction").classList.toggle("is-integer", exact.denominator === 1);
+    const expression = Boolean(exact.expression);
+    $("#volumeFraction").classList.toggle("is-expression", expression);
+    $("#volumeFraction").classList.toggle(
+      "is-integer",
+      !expression && exact.denominator === 1,
+    );
+    if (expression) {
+      $("#volumeNumerator").textContent = exact.label;
+      $("#volumeDenominator").textContent = "";
+    } else {
+      $("#volumeNumerator").textContent =
+        exact.denominator === 1
+          ? `${exact.numerator}π`
+          : Math.abs(exact.numerator) === 1
+            ? `${exact.numerator < 0 ? "−" : ""}π`
+            : `${exact.numerator}π`;
+      $("#volumeDenominator").textContent = String(exact.denominator);
+    }
+  } else {
+    $("#volumeFraction").classList.remove("is-expression", "is-integer");
   }
   $("#volumeDecimal").textContent = model.volume.toFixed(3);
   $("#volumeCaption").textContent = model.formula.note;
@@ -856,7 +869,7 @@ function updateResults() {
   $("#formulaResult").innerHTML = buildResultHTML(model);
   $("#formulaNote").textContent = model.axis.isHorizontal
     ? `${model.formula.note} All radii are measured from ${model.axis.label}.`
-    : `${model.formula.note} u is measured along ${model.axis.label}; R and r are perpendicular distances.`;
+    : `${model.formula.note} ${model.formula.variable} is measured along ${model.axis.label}; R and r are perpendicular distances.`;
   $("#regionReadout").textContent = describeRegion(model);
 }
 
@@ -872,15 +885,16 @@ function describeRegion(model) {
 
 function buildIntegralHTML(term, model, index) {
   const oblique = model.formula.kind === "oblique";
+  const genericRadii = oblique && !term.explicitRadii;
   const lower = oblique ? formatBound(term.uStart, 3) : formatBound(term.a);
   const upper = oblique ? formatBound(term.uEnd, 3) : formatBound(term.b);
-  const differential = oblique ? "du" : "dx";
-  const variable = oblique ? "u" : "x";
+  const variable = model.formula.variable || (oblique ? "u" : "x");
+  const differential = `d${variable}`;
   const outerSource = prettyMathHTML(term.outerText);
   const innerSource = prettyMathHTML(term.innerText);
   const isDisk = term.innerText === "0";
   const compact =
-    oblique ||
+    genericRadii ||
     model.formula.terms.length > 1 ||
     outerSource.length + innerSource.length > 32;
   const outer = compact ? `R(${variable})` : outerSource;
@@ -897,7 +911,7 @@ function buildIntegralHTML(term, model, index) {
     ? ""
     : `<span class="formula-eq">−</span><span class="formula-power"><span class="formula-bracket">[</span><span>${inner}</span><span class="formula-bracket">]</span><sup>2</sup></span>`;
 
-  const radii = oblique
+  const radii = genericRadii
     ? ""
     : `<div class="formula-row formula-radii"><span class="formula-eq">R(${variable})</span><span>=</span><span>${outerSource}</span></div>${
         isDisk

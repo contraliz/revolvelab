@@ -838,6 +838,16 @@ input:focus-visible {
   display: none;
 }
 
+.fraction.is-expression {
+  font-size: 22px;
+  letter-spacing: -0.01em;
+}
+
+.fraction.is-expression i,
+.fraction.is-expression span:last-child {
+  display: none;
+}
+
 .volume-card.is-numeric .volume-decimal > span:nth-child(2) {
   font-size: 27px;
 }

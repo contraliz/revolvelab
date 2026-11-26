@@ -922,7 +922,7 @@ export function createRevolvedSolid(model) {
 
     if (wire) {
       contourMaterial.color.setHex(0xcfe9e5);
-      contourMaterial.opacity = 1;
+      contourMaterial.opacity = 0.72;
       contourMaterial.linewidth = 1;
     } else if (xray) {
       contourMaterial.color.setHex(0xa8f5e9);
@@ -933,7 +933,7 @@ export function createRevolvedSolid(model) {
       contourMaterial.opacity = 0.16;
       contourMaterial.linewidth = 1.05;
     }
-    contourMaterial.transparent = !wire;
+    contourMaterial.transparent = true;
     contourMaterial.depthTest = true;
     contourMaterial.needsUpdate = true;
 

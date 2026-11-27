@@ -1,5 +1,6 @@
 import {
   approximateFraction,
+  compileAst,
   compileConstant,
   compileExpression,
   containsRestriction,
@@ -107,121 +108,554 @@ function isSquarePolynomial(node) {
     if (node.op === "/") {
       return isSquarePolynomial(node.left) && isPolynomialIn(node.right);
     }
+    if (node.op === "^") {
+      // x^(1/2) is another spelling of sqrt(x), and x^(n/2) squares to a
+      // polynomial, so the volume integral remains exact.
+      const exponent = constantNumericValue(node.right);
+      const doubled = exponent === null ? null : exponent * 2;
+      if (
+        Number.isInteger(doubled) &&
+        doubled >= 1 &&
+        isPolynomialIn(node.left)
+      ) {
+        return true;
+      }
+    }
   }
   return false;
 }
 
-function compileLine(input, index) {
-  const raw = String(input.text ?? "").trim();
-  if (!raw) return null;
+function containsConstantSymbol(source) {
+  return /\b(?:pi|tau|e)\b/i.test(source) || /[πτ]/.test(source);
+}
 
-  const verticalMatch = raw.match(/^\s*x\s*=\s*(.+)$/i);
-  if (verticalMatch) {
-    let value;
-    try {
-      value = compileConstant(verticalMatch[1]).value;
-    } catch (error) {
-      throw new RegionError(`Vertical line: ${error.message}`, input.id);
-    }
-    if (!Number.isFinite(value)) {
-      throw new RegionError("A vertical line needs a finite x-value.", input.id);
-    }
-    return {
-      id: input.id,
-      index,
-      raw,
-      color: input.color,
-      kind: "vertical",
-      implicit: Boolean(input.implicit),
-      role: input.role ?? null,
-      verticalX: value,
-      source: `x = ${
-        formatExactNumber(value) ??
-        formatNumber(value, 6).replace("-", "−")
-      }`,
-      core: null,
-      restrictions: [],
-      evaluate: () => Number.NaN,
-      polynomial: false,
-      squarePolynomial: false,
-      hasRestriction: false,
-      domainRuns: [],
-    };
-  }
+function isExplicitFunctionLeft(text) {
+  return /^\s*(?:y|f\s*\(\s*x\s*\)|[a-z]\s*\(\s*x\s*\))\s*$/i.test(text);
+}
 
-  const stripped = stripFunctionPrefix(raw);
-  if (!stripped) {
-    throw new RegionError("Enter a function or a vertical line x = c.", input.id);
-  }
-
-  const { core, restrictions } = splitTrailingRestrictions(stripped);
-  if (!core) {
-    throw new RegionError("This line does not contain a function.", input.id);
-  }
-
-  let coreExpression;
-  try {
-    coreExpression = compileExpression(core);
-  } catch (error) {
-    throw new RegionError(error.message, input.id);
-  }
-
-  if (usesVariable(coreExpression.ast, "y")) {
-    throw new RegionError(
-      "Use y = f(x) for a boundary. Implicit equations with y on both sides are not supported.",
-      input.id,
-    );
-  }
-
-  if (coreExpression.ast.type === "compare") {
-    throw new RegionError(
-      "This is a condition, not a function. Enter y = f(x), then add a restriction like {0 <= x <= 2}.",
-      input.id,
-    );
-  }
-
-  const restrictionExpressions = [];
-  for (const text of restrictions) {
-    try {
-      const compiled = compileExpression(text);
-      restrictionExpressions.push(compiled);
-    } catch (error) {
-      throw new RegionError(`Restriction: ${error.message}`, input.id);
-    }
-  }
-
+function makeFunctionLine({
+  input,
+  index,
+  coreExpression,
+  source,
+  restrictions,
+  implicit = false,
+}) {
   const evaluate = (x) => {
-    let value = coreExpression.evaluate(x, 0);
+    const value = coreExpression.evaluate(x, 0);
     if (!Number.isFinite(value)) return Number.NaN;
-    for (const restriction of restrictionExpressions) {
+    for (const restriction of restrictions) {
       const allowed = restriction.evaluate(x, value);
       if (!allowed || Number.isNaN(allowed)) return Number.NaN;
     }
     return value;
   };
 
-  const source = core.trim();
   return {
     id: input.id,
     index,
-    raw,
+    raw: String(input.text ?? "").trim(),
     color: input.color,
     kind: "function",
-    implicit: Boolean(input.implicit),
+    implicit,
+    hidden: Boolean(input.hidden),
     role: input.role ?? null,
+    parentId: input.parentId ?? null,
+    branchIndex: 0,
     source,
     core: coreExpression,
-    restrictions: restrictionExpressions,
+    restrictions,
     evaluate,
     polynomial:
       isPolynomialIn(coreExpression.ast) &&
-      !/\b(?:pi|tau|e)\b/i.test(source),
+      !containsConstantSymbol(source),
     squarePolynomial:
       isSquarePolynomial(coreExpression.ast) &&
-      !/\b(?:pi|tau|e)\b/i.test(source),
+      !containsConstantSymbol(source),
     hasRestriction:
-      restrictionExpressions.length > 0 || containsRestriction(coreExpression.ast),
+      restrictions.length > 0 || containsRestriction(coreExpression.ast),
+    domainRuns: [],
   };
+}
+
+function makeVerticalLine({ input, index, value }) {
+  return {
+    id: input.id,
+    index,
+    raw: String(input.text ?? "").trim(),
+    color: input.color,
+    kind: "vertical",
+    implicit: Boolean(input.implicit),
+    hidden: Boolean(input.hidden),
+    role: input.role ?? null,
+    parentId: input.parentId ?? null,
+    branchIndex: 0,
+    verticalX: value,
+    source: `x = ${
+      formatExactNumber(value) ??
+      formatNumber(value, 6).replace("-", "−")
+    }`,
+    core: null,
+    restrictions: [],
+    evaluate: () => Number.NaN,
+    polynomial: false,
+    squarePolynomial: false,
+    hasRestriction: false,
+    domainRuns: [],
+  };
+}
+
+function makeImplicitLine({
+  input,
+  index,
+  branchIndex,
+  ast,
+  restrictions,
+}) {
+  const source = displayExpression(ast, 0, "x") || "0";
+  const coreExpression = compileAst(ast, { source });
+  const evaluate = (x) => {
+    const value = coreExpression.evaluate(x, 0);
+    if (!Number.isFinite(value)) return Number.NaN;
+    for (const restriction of restrictions) {
+      const allowed = restriction.evaluate(x, value);
+      if (!allowed || Number.isNaN(allowed)) return Number.NaN;
+    }
+    return value;
+  };
+
+  return {
+    id: `${input.id}::branch-${branchIndex}`,
+    index,
+    raw: String(input.text ?? "").trim(),
+    color: input.color,
+    kind: "function",
+    implicit: true,
+    hidden: Boolean(input.hidden),
+    role: input.role ?? null,
+    parentId: input.id,
+    branchIndex,
+    source,
+    core: coreExpression,
+    restrictions,
+    evaluate,
+    polynomial:
+      isPolynomialIn(ast, "x") &&
+      !containsConstantSymbol(source),
+    squarePolynomial:
+      isSquarePolynomial(ast) &&
+      !containsConstantSymbol(source),
+    hasRestriction:
+      restrictions.length > 0 || containsRestriction(ast),
+    domainRuns: [],
+  };
+}
+
+function trimPolynomial(coefficients) {
+  const result = [...coefficients];
+  while (result.length > 1 && symbolicValue(result.at(-1)) === 0) {
+    result.pop();
+  }
+  return result;
+}
+
+function multiplyPolynomials(left, right) {
+  const degree = left.length + right.length - 2;
+  if (degree > 2) return null;
+  const result = Array.from({ length: degree + 1 }, () => symbolicNumber(0));
+  for (let first = 0; first < left.length; first++) {
+    for (let second = 0; second < right.length; second++) {
+      result[first + second] = symbolicBinary(
+        "+",
+        result[first + second],
+        symbolicBinary("*", left[first], right[second]),
+      );
+    }
+  }
+  return trimPolynomial(result);
+}
+
+function constantNumericValue(node) {
+  if (!node || usesVariable(node, "x") || usesVariable(node, "y")) return null;
+  const value = evaluateSymbolic(node, 0);
+  return Number.isFinite(value) ? value : null;
+}
+
+/**
+ * Collect c0 + c1*y + c2*y^2 for a conic (or any expression that stays at most
+ * quadratic in y). Coefficients are ASTs in x. Returning null means the
+ * expression is outside the supported class and the caller can explain that.
+ */
+function polynomialCoefficients(node, variable, depth = 0) {
+  if (!node || depth > 12) return null;
+
+  if (node.type === "number") return [symbolicNumber(node.value)];
+  if (node.type === "variable") {
+    return node.name === variable
+      ? [symbolicNumber(0), symbolicNumber(1)]
+      : [node];
+  }
+  if (node.type === "unary") {
+    const inner = polynomialCoefficients(node.value, variable, depth + 1);
+    return inner
+      ? inner.map((coefficient) => symbolicUnary(coefficient))
+      : null;
+  }
+  if (node.type === "call") {
+    return usesVariable(node, variable) ? null : [node];
+  }
+  if (node.type !== "binary") return null;
+
+  const left = polynomialCoefficients(node.left, variable, depth + 1);
+  const right = polynomialCoefficients(node.right, variable, depth + 1);
+  if (!left || !right) return null;
+
+  if (node.op === "+" || node.op === "-") {
+    const length = Math.max(left.length, right.length);
+    return trimPolynomial(
+      Array.from({ length }, (_, index) =>
+        symbolicBinary(
+          node.op,
+          left[index] ?? symbolicNumber(0),
+          right[index] ?? symbolicNumber(0),
+        ),
+      ),
+    );
+  }
+
+  if (node.op === "*") return multiplyPolynomials(left, right);
+
+  if (node.op === "/") {
+    if (usesVariable(node.right, variable)) return null;
+    return trimPolynomial(
+      left.map((coefficient) =>
+        symbolicBinary("/", coefficient, node.right),
+      ),
+    );
+  }
+
+  if (node.op === "^") {
+    if (usesVariable(node.right, variable)) return null;
+    const exponent = constantNumericValue(node.right);
+    if (!Number.isInteger(exponent) || exponent < 0 || exponent > 2) {
+      return null;
+    }
+    let result = [symbolicNumber(1)];
+    for (let index = 0; index < exponent; index++) {
+      result = multiplyPolynomials(result, left);
+      if (!result) return null;
+    }
+    return result;
+  }
+
+  return null;
+}
+
+function solvePolynomialForVariable(coefficients) {
+  const trimmed = trimPolynomial(coefficients);
+  const degree = trimmed.length - 1;
+  if (degree <= 0) return [];
+  if (degree === 1) {
+    const [constant, linear] = trimmed;
+    return [symbolicBinary("/", symbolicUnary(constant), linear)];
+  }
+  if (degree === 2) {
+    const [constant, linear, quadratic] = trimmed;
+    const discriminant = symbolicBinary(
+      "-",
+      symbolicBinary("^", linear, symbolicNumber(2)),
+      symbolicBinary(
+        "*",
+        symbolicNumber(4),
+        symbolicBinary("*", quadratic, constant),
+      ),
+    );
+    const root = symbolicCall("sqrt", [discriminant]);
+    const denominator = symbolicBinary(
+      "*",
+      symbolicNumber(2),
+      quadratic,
+    );
+    const negativeLinear = symbolicUnary(linear);
+    return [
+      symbolicBinary(
+        "/",
+        symbolicBinary("+", negativeLinear, root),
+        denominator,
+      ),
+      symbolicBinary(
+        "/",
+        symbolicBinary("-", negativeLinear, root),
+        denominator,
+      ),
+    ];
+  }
+  return [];
+}
+
+function solveImplicitBranches(leftAst, rightAst) {
+  const leftHasY = usesVariable(leftAst, "y");
+  const rightHasY = usesVariable(rightAst, "y");
+  if (!leftHasY && !rightHasY) return [];
+
+  let branches = [];
+  if (leftHasY !== rightHasY) {
+    branches = leftHasY
+      ? invertExpression(leftAst, rightAst, 0, "y")
+      : invertExpression(rightAst, leftAst, 0, "y");
+  }
+
+  if (branches.length === 0) {
+    const coefficients = polynomialCoefficients(
+      symbolicBinary("-", leftAst, rightAst),
+      "y",
+    );
+    if (coefficients) branches = solvePolynomialForVariable(coefficients);
+  }
+
+  const seen = new Set();
+  return branches.filter((branch) => {
+    if (!branch || usesVariable(branch, "y")) return false;
+    const source = displayExpression(branch, 0, "x");
+    if (!source || seen.has(source)) return false;
+    seen.add(source);
+    return true;
+  });
+}
+
+function compileImplicitLine(
+  input,
+  index,
+  leftText,
+  rightText,
+  restrictions,
+) {
+  let left;
+  let right;
+  try {
+    left = compileExpression(leftText);
+    right = compileExpression(rightText);
+  } catch (error) {
+    throw new RegionError(`Implicit equation: ${error.message}`, input.id);
+  }
+
+  if (!usesVariable(left.ast, "y") && !usesVariable(right.ast, "y")) {
+    throw new RegionError(
+      "This equation does not contain y. Enter a function of x or a vertical line x = c.",
+      input.id,
+    );
+  }
+
+  const branches = solveImplicitBranches(left.ast, right.ast);
+  if (branches.length === 0) {
+    throw new RegionError(
+      "Could not solve this implicit equation for y. Rewrite it as y = f(x), or use a conic such as x^2 + y^2 = 1.",
+      input.id,
+    );
+  }
+
+  return branches.map((ast, branchIndex) =>
+    makeImplicitLine({
+      input,
+      index,
+      branchIndex,
+      ast,
+      restrictions,
+    }),
+  );
+}
+
+function compileLine(input, index) {
+  const raw = String(input.text ?? "").trim();
+  if (!raw) return [];
+
+  const normalized = normalizeExpression(raw);
+  const { core: body, restrictions } = splitTrailingRestrictions(normalized);
+  if (!body) {
+    throw new RegionError("This line does not contain a function.", input.id);
+  }
+
+  const restrictionExpressions = [];
+  for (const text of restrictions) {
+    try {
+      restrictionExpressions.push(compileExpression(text));
+    } catch (error) {
+      throw new RegionError(`Restriction: ${error.message}`, input.id);
+    }
+  }
+
+  const verticalMatch = body.match(/^\s*x\s*=\s*(.+)$/i);
+  if (verticalMatch) {
+    let constant = null;
+    try {
+      constant = compileConstant(verticalMatch[1]);
+    } catch {
+      constant = null;
+    }
+    if (constant) {
+      if (!Number.isFinite(constant.value)) {
+        throw new RegionError(
+          "A vertical line needs a finite x-value.",
+          input.id,
+        );
+      }
+      return [makeVerticalLine({ input, index, value: constant.value })];
+    }
+  }
+
+  // Leave piecewise expressions alone: a colon or comparison inside braces is
+  // not an equation separator for the line.
+  if (!body.trim().startsWith("{")) {
+    let separator;
+    try {
+      separator = findEquationSeparator(body);
+    } catch (error) {
+      throw new RegionError(error.message, input.id);
+    }
+
+    if (separator >= 0) {
+      const leftText = body.slice(0, separator).trim();
+      const rightText = body.slice(separator + 1).trim();
+      if (!leftText || !rightText) {
+        throw new RegionError(
+          "An equation needs an expression on both sides of =.",
+          input.id,
+        );
+      }
+
+      if (isExplicitFunctionLeft(leftText)) {
+        let right;
+        try {
+          right = compileExpression(rightText);
+        } catch (error) {
+          throw new RegionError(error.message, input.id);
+        }
+        if (!usesVariable(right.ast, "y")) {
+          return [
+            makeFunctionLine({
+              input,
+              index,
+              coreExpression: right,
+              source: rightText,
+              restrictions: restrictionExpressions,
+              implicit: Boolean(input.implicit),
+            }),
+          ];
+        }
+      }
+
+      return compileImplicitLine(
+        input,
+        index,
+        leftText,
+        rightText,
+        restrictionExpressions,
+      );
+    }
+  }
+
+  const stripped = stripFunctionPrefix(body);
+  if (!stripped) {
+    throw new RegionError("Enter a function or a vertical line x = c.", input.id);
+  }
+
+  let coreExpression;
+  try {
+    coreExpression = compileExpression(stripped);
+  } catch (error) {
+    throw new RegionError(error.message, input.id);
+  }
+
+  if (
+    coreExpression.ast.type === "compare" ||
+    coreExpression.ast.type === "logical"
+  ) {
+    throw new RegionError(
+      "This is a condition, not a function. Enter y = f(x), then add a restriction like {0 <= x <= 2}.",
+      input.id,
+    );
+  }
+
+  if (usesVariable(coreExpression.ast, "y")) {
+    return compileImplicitLine(
+      input,
+      index,
+      stripped,
+      "0",
+      restrictionExpressions,
+    );
+  }
+
+  return [
+    makeFunctionLine({
+      input,
+      index,
+      coreExpression,
+      source: stripped,
+      restrictions: restrictionExpressions,
+      implicit: Boolean(input.implicit),
+    }),
+  ];
+}
+
+/**
+ * True when a line is an equation in both x and y (or a bare expression that
+ * contains y) and therefore needs implicit handling. Vertical lines and
+ * ordinary y = f(x) inputs stay on the explicit path.
+ */
+export function isImplicitEquationInput(value) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return false;
+
+  const { core } = splitTrailingRestrictions(normalizeExpression(raw));
+  if (!core) return false;
+
+  if (core.trim().startsWith("{")) {
+    try {
+      return usesVariable(compileExpression(core).ast, "y");
+    } catch {
+      return false;
+    }
+  }
+
+  const verticalMatch = core.match(/^\s*x\s*=\s*(.+)$/i);
+  if (verticalMatch) {
+    try {
+      compileConstant(verticalMatch[1]);
+      return false;
+    } catch {
+      // Not a constant vertical boundary; it may still be an implicit curve.
+    }
+  }
+
+  let separator;
+  try {
+    separator = findEquationSeparator(core);
+  } catch {
+    return false;
+  }
+
+  if (separator >= 0) {
+    const leftText = core.slice(0, separator).trim();
+    const rightText = core.slice(separator + 1).trim();
+    if (!leftText || !rightText) return false;
+    if (isExplicitFunctionLeft(leftText)) {
+      try {
+        return usesVariable(compileExpression(rightText).ast, "y");
+      } catch {
+        return true;
+      }
+    }
+    return true;
+  }
+
+  const stripped = stripFunctionPrefix(core);
+  if (!stripped) return false;
+  try {
+    return usesVariable(compileExpression(stripped).ast, "y");
+  } catch {
+    return false;
+  }
 }
 
 function numericLiterals(text) {
@@ -501,11 +935,33 @@ function pairEndpointClosed(cell, endpoint, side, verticalXs = []) {
     if (Math.abs(nearUpper - nearLower) <= tolerance) return true;
   }
 
+  // A cusp such as sqrt(x) meeting x at the origin has one branch whose value
+  // is only defined infinitesimally inside the endpoint. Compare the limiting
+  // values from inside the cell instead of requiring both curves to be finite
+  // at the endpoint itself.
+  const limitEpsilon = Math.max(1e-12, width * 1e-12);
+  const limitX =
+    side === "left" ? endpoint + limitEpsilon : endpoint - limitEpsilon;
+  const limitLower = safeEvaluate(cell.lowerLine, limitX);
+  const limitUpper = safeEvaluate(cell.upperLine, limitX);
+  if (Number.isFinite(limitLower) && Number.isFinite(limitUpper)) {
+    const scale = Math.min(
+      Math.max(1, Math.abs(limitLower), Math.abs(limitUpper)),
+      100,
+    );
+    if (Math.abs(limitUpper - limitLower) <= 1e-4 * scale) return true;
+  }
+
   const eventTolerance = Math.max(1e-7, cell.span * 1e-6);
   if (verticalXs.some((value) => near(endpoint, value, eventTolerance))) {
     return true;
   }
   for (const line of [cell.lowerLine, cell.upperLine]) {
+    // A natural domain endpoint, such as the left edge of a circle, is a
+    // cusp where the curve turns back; it is not a wall that closes a region.
+    // Only an explicit restriction (or a vertical line, handled above) cuts
+    // the region off at a domain boundary.
+    if (!line.hasRestriction) continue;
     for (const run of line.domainRuns) {
       if (
         side === "left" &&
@@ -1222,6 +1678,21 @@ function integrateAlongAxis(cells, axis) {
   return Math.PI * total;
 }
 
+function cellCrossesSymmetrically(cell, kValue) {
+  let sampled = false;
+  for (let sample = 1; sample <= 7; sample++) {
+    const x = cell.a + ((cell.b - cell.a) * sample) / 8;
+    const lower = cell.lower(x);
+    const upper = cell.upper(x);
+    if (!Number.isFinite(lower) || !Number.isFinite(upper)) continue;
+    const tolerance =
+      1e-7 * Math.max(1, Math.abs(kValue), Math.abs(lower), Math.abs(upper));
+    if (Math.abs((lower + upper) / 2 - kValue) > tolerance) return false;
+    sampled = true;
+  }
+  return sampled;
+}
+
 function cellSideOfAxis(cell, axis) {
   if (!axis.isHorizontal) return "crosses";
   const k = axis.point.y;
@@ -1536,28 +2007,34 @@ function symbolicExponentRoot(rhs, reciprocal) {
  * combinations such as sqrt(x - 1) + 2. A null result leaves the integral in
  * its generic R(u)/r(u) form rather than inventing an incorrect inverse.
  */
-function invertExpression(node, rhs, depth = 0) {
-  if (!node || depth > 12 || !usesVariable(node, "x")) return [];
+function invertExpression(node, rhs, depth = 0, variable = "x") {
+  if (!node || depth > 12 || !usesVariable(node, variable)) return [];
   if (node.type === "variable") {
-    return node.name === "x" ? [rhs] : [];
+    return node.name === variable ? [rhs] : [];
   }
   if (node.type === "unary") {
     return invertExpression(
       node.value,
       symbolicBinary("-", symbolicNumber(0), rhs),
       depth + 1,
+      variable,
     );
   }
   if (node.type === "binary") {
-    const leftHas = usesVariable(node.left, "x");
-    const rightHas = usesVariable(node.right, "x");
+    const leftHas = usesVariable(node.left, variable);
+    const rightHas = usesVariable(node.right, variable);
     if (leftHas === rightHas) return [];
 
     if (node.op === "+") {
       const next = leftHas
         ? symbolicBinary("-", rhs, node.right)
         : symbolicBinary("-", rhs, node.left);
-      return invertExpression(leftHas ? node.left : node.right, next, depth + 1);
+      return invertExpression(
+        leftHas ? node.left : node.right,
+        next,
+        depth + 1,
+        variable,
+      );
     }
     if (node.op === "-") {
       if (leftHas) {
@@ -1565,12 +2042,14 @@ function invertExpression(node, rhs, depth = 0) {
           node.left,
           symbolicBinary("+", rhs, node.right),
           depth + 1,
+          variable,
         );
       }
       return invertExpression(
         node.right,
         symbolicBinary("-", node.left, rhs),
         depth + 1,
+        variable,
       );
     }
     if (node.op === "*") {
@@ -1579,6 +2058,7 @@ function invertExpression(node, rhs, depth = 0) {
         leftHas ? node.left : node.right,
         symbolicBinary("/", rhs, divisor),
         depth + 1,
+        variable,
       );
     }
     if (node.op === "/") {
@@ -1587,24 +2067,31 @@ function invertExpression(node, rhs, depth = 0) {
           node.left,
           symbolicBinary("*", rhs, node.right),
           depth + 1,
+          variable,
         );
       }
       return invertExpression(
         node.right,
         symbolicBinary("/", node.left, rhs),
         depth + 1,
+        variable,
       );
     }
     if (node.op === "^") {
       if (rightHas) return [];
-      const exponent = evaluateSymbolic(node.right, 0);
-      if (!Number.isFinite(exponent) || Math.abs(exponent) < 1e-12) return [];
+      const exponent = constantNumericValue(node.right);
+      if (exponent === null || Math.abs(exponent) < 1e-12) return [];
       if (Math.abs(exponent - 1) < 1e-12) {
-        return invertExpression(node.left, rhs, depth + 1);
+        return invertExpression(node.left, rhs, depth + 1, variable);
       }
       const reciprocal = 1 / exponent;
       const root = symbolicExponentRoot(rhs, reciprocal);
-      const results = invertExpression(node.left, root, depth + 1);
+      const results = invertExpression(
+        node.left,
+        root,
+        depth + 1,
+        variable,
+      );
       if (Number.isInteger(exponent) && Math.abs(exponent % 2) === 0) {
         const negativeRoot =
           Math.abs(reciprocal - 0.5) < 1e-9
@@ -1614,7 +2101,14 @@ function invertExpression(node, rhs, depth = 0) {
               : symbolicUnary(
                   symbolicBinary("^", rhs, symbolicNumber(reciprocal)),
                 );
-        results.push(...invertExpression(node.left, negativeRoot, depth + 1));
+        results.push(
+          ...invertExpression(
+            node.left,
+            negativeRoot,
+            depth + 1,
+            variable,
+          ),
+        );
       }
       return results;
     }
@@ -1627,6 +2121,7 @@ function invertExpression(node, rhs, depth = 0) {
         argument,
         symbolicBinary("^", rhs, symbolicNumber(2)),
         depth + 1,
+        variable,
       );
     }
     if (node.name === "cbrt") {
@@ -1634,21 +2129,33 @@ function invertExpression(node, rhs, depth = 0) {
         argument,
         symbolicBinary("^", rhs, symbolicNumber(3)),
         depth + 1,
+        variable,
       );
     }
     if (node.name === "exp") {
-      return invertExpression(argument, symbolicCall("ln", [rhs]), depth + 1);
+      return invertExpression(
+        argument,
+        symbolicCall("ln", [rhs]),
+        depth + 1,
+        variable,
+      );
     }
     if (node.name === "ln") {
-      return invertExpression(argument, symbolicCall("exp", [rhs]), depth + 1);
+      return invertExpression(
+        argument,
+        symbolicCall("exp", [rhs]),
+        depth + 1,
+        variable,
+      );
     }
     if (node.name === "abs") {
       return [
-        ...invertExpression(argument, rhs, depth + 1),
+        ...invertExpression(argument, rhs, depth + 1, variable),
         ...invertExpression(
           argument,
           symbolicUnary(rhs),
           depth + 1,
+          variable,
         ),
       ];
     }
@@ -2085,6 +2592,11 @@ function buildFormula(cells, axis, method, volume, exact) {
       } else if (side === "below") {
         outerText = radialDisplay(cell.lowerLine.source, kValue, "below");
         innerText = radialDisplay(cell.upperLine.source, kValue, "below");
+      } else if (cellCrossesSymmetrically(cell, kValue)) {
+        // A disk centred on the rotation line has the same radius above and
+        // below it, so the max(...) form would be needlessly noisy.
+        outerText = radialDisplay(cell.upperLine.source, kValue, "above");
+        innerText = "0";
       } else {
         outerText = zeroAxis
           ? `max(|${cell.upperLine.source}|, |${cell.lowerLine.source}|)`
@@ -2137,7 +2649,7 @@ function buildFormula(cells, axis, method, volume, exact) {
 
 export function analyzeLines(inputs, axisText, options = {}) {
   const usable = (inputs || []).filter((input) => String(input.text ?? "").trim());
-  if (usable.length < 2) {
+  if (usable.length === 0) {
     return {
       ok: false,
       error: "Add at least two function lines to enclose a region.",
@@ -2147,15 +2659,21 @@ export function analyzeLines(inputs, axisText, options = {}) {
 
   let lines;
   try {
-    lines = usable
-      .map((input, index) => compileLine(input, index))
-      .filter(Boolean);
+    lines = usable.flatMap((input, index) => compileLine(input, index));
   } catch (error) {
     return {
       ok: false,
       error: error.message,
       lineId: error.lineId ?? null,
       lines: [],
+    };
+  }
+
+  if (lines.length < 2) {
+    return {
+      ok: false,
+      error: "Add at least two function lines to enclose a region.",
+      lines,
     };
   }
 
@@ -2253,7 +2771,11 @@ export function analyzeLines(inputs, axisText, options = {}) {
 
   const exactCandidates = functionLines.every((line) => {
     if (line.polynomial) return true;
-    return axis.isHorizontal && Math.abs(axis.point.y) < 1e-9 && line.squarePolynomial;
+    return (
+      axis.isHorizontal &&
+      Math.abs(axis.point.y) < 1e-9 &&
+      line.squarePolynomial
+    );
   });
   const rationalEndpoint = (value) =>
     Boolean(

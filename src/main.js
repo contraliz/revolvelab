@@ -4,6 +4,7 @@ import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
 import {
   analyzeLines,
   formatBound,
+  isImplicitEquationInput,
   prettyExpression,
 } from "./region.js";
 import { createRevolvedSolid, disposeRevolvedSolid } from "./solid.js";
@@ -550,10 +551,10 @@ function buildLineRows() {
     input.setAttribute("aria-label", `Line ${index + 1}`);
     input.placeholder =
       index === 0
-        ? "y = -x^2 + 4x"
+        ? "y = -x^2 + 4x   or   x^2 + y^2 = 1"
         : index === 1
           ? "y = 0   or   x = 4"
-          : "y = sin(x)   or   x = 4";
+          : "y = sin(x)   or   x^2 + y^2 = 4";
     input.addEventListener("input", (event) => {
       updateLineText(line.id, event.target.value);
     });
@@ -671,8 +672,19 @@ function countFunctionLines(lines = state.lines) {
   }).length;
 }
 
+function hasImplicitLine(lines = state.lines) {
+  return lines.some((line) => {
+    const text = String(line.text ?? "").trim();
+    return text && isImplicitEquationInput(text);
+  });
+}
+
+function shouldAutoClose(lines = state.lines) {
+  return !hasImplicitLine(lines) && countFunctionLines(lines) === 1;
+}
+
 function effectiveInputs() {
-  if (countFunctionLines() !== 1) return state.lines;
+  if (!shouldAutoClose()) return state.lines;
   return [
     ...state.lines,
     {
@@ -680,6 +692,7 @@ function effectiveInputs() {
       text: "y = 0",
       color: "#7f8a95",
       implicit: true,
+      hidden: true,
       role: "x-axis",
     },
     {
@@ -687,6 +700,7 @@ function effectiveInputs() {
       text: "x = 0",
       color: "#7f8a95",
       implicit: true,
+      hidden: true,
       role: "y-axis",
     },
   ];
@@ -695,8 +709,7 @@ function effectiveInputs() {
 function analyzeNow(options = {}) {
   const { fit = false } = options;
   const empty = state.lines.length === 0;
-  const functionCount = countFunctionLines();
-  const autoAxes = functionCount === 1;
+  const autoAxes = shouldAutoClose();
   $("#autoBoundaryNote").hidden = !autoAxes;
 
   let model;
@@ -747,7 +760,7 @@ function analyzeNow(options = {}) {
     const detail = document.createElement("span");
     if (empty) {
       title.textContent = "Start with a line";
-      detail.textContent = "Use Add line to enter y = f(x) or x = c.";
+      detail.textContent = "Use Add line to enter y = f(x), x = c, or an implicit equation such as x^2 + y^2 = 1.";
       $("#statusMessage").textContent = "2D graph · add a line to begin";
     } else {
       title.textContent = "Check the expressions";

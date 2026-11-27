@@ -178,10 +178,36 @@ class Tokenizer {
       if (/[a-zA-Z]/.test(character)) {
         const match = source.slice(index).match(/^[a-zA-Z][a-zA-Z0-9_]*/);
         const raw = match[0];
+        const name = raw.toLowerCase();
+
+        // Desmos reads xy as x*y. The tokenizer normally keeps words whole so
+        // function names such as sin and constants such as pi still work, so
+        // only split an otherwise unknown word made entirely of x/y letters.
+        if (
+          raw.length > 1 &&
+          /^[xy]+$/i.test(raw) &&
+          !(name in CONSTANTS) &&
+          !(name in FUNCTIONS) &&
+          !(name in MULTI_FUNCTIONS) &&
+          !(name in ALIASES)
+        ) {
+          for (let offset = 0; offset < raw.length; offset++) {
+            const letter = raw[offset];
+            this.tokens.push({
+              type: "identifier",
+              value: letter,
+              name: letter.toLowerCase(),
+              index: index + offset,
+            });
+          }
+          index += raw.length;
+          continue;
+        }
+
         this.tokens.push({
           type: "identifier",
           value: raw,
-          name: raw.toLowerCase(),
+          name,
           index,
         });
         index += raw.length;
@@ -454,6 +480,9 @@ class Parser {
       }
 
       if (name === "y") {
+        if (!this.allowVariable) {
+          throw new Error("The variable y is not allowed here.");
+        }
         return { type: "variable", name: "y" };
       }
 
@@ -668,14 +697,19 @@ export function compileExpression(value, options = {}) {
   try {
     parser = new Parser(source, options);
     const ast = parser.parse();
-    return {
-      source,
-      ast,
-      evaluate: (x = 0, y = 0) => evaluateNode(ast, { x, y }),
-    };
+    return compileAst(ast, { source });
   } catch (error) {
     throw new Error(cleanErrorMessage(error.message, source));
   }
+}
+
+/** Wrap an already-parsed AST in the same evaluator shape as compileExpression. */
+export function compileAst(ast, options = {}) {
+  return {
+    source: options.source ?? "",
+    ast,
+    evaluate: (x = 0, y = 0) => evaluateNode(ast, { x, y }),
+  };
 }
 
 function cleanErrorMessage(message, source) {

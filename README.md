@@ -30,6 +30,8 @@ npm run preview
 
 - Starts on a full-size 2D graph with a compact expression sidebar.
 - Accepts any number of `y = f(x)` lines, each with its own color.
+- Accepts standard-form equations such as `x^2 + y^2 = 1`; conics are solved
+  into upper/lower `y` branches and can be revolved directly.
 - Accepts vertical boundary lines such as `x = 4`; a bare expression is treated
   as `y = ...`.
 - Can be emptied completely. With zero lines, the editor shows only **Add line**.
@@ -57,10 +59,18 @@ Enter either a full equation or just the right-hand side:
 y = -x^2 + 4x
 -x^2 + 4x
 x = 4
+x^2 + y^2 = 1
+x^2/4 + y^2/9 = 1
+x^2 + xy + y^2 = 1
 ```
 
 A leading `y =` or `f(x) =` is optional. A line beginning with `x =` is a
-vertical boundary that can close the left or right side of the region.
+vertical boundary that can close the left or right side of the region. Equations
+that mix `x` and `y`, such as `x^2 + y^2 = 1`, are solved for `y` and added as
+separate branches. Linear and quadratic-in-`y` equations are supported, so
+circles, ellipses, parabolas, hyperbolas, and rotated conics work directly. A
+single closed conic, such as `x^2 + y^2 = 1`, encloses its own region and does
+not trigger the first-quadrant auto-closing rule.
 
 ### Rotation-line input
 
@@ -183,6 +193,13 @@ The region finder looks for intervals where a pair of curves is closed at both
 ends — either because the curves meet, a domain restriction ends, or a vertical
 boundary line crosses. Nested regions are removed so overlapping pairs are not
 double-counted.
+
+Implicit equations are converted to real `y = f(x)` branches before region
+finding. A quadratic such as `x^2 + y^2 = 1` produces two branches,
+`y = ±√(1 − x²)`, which meet at the left and right edges so the enclosed disk
+can be revolved as one region. The same conversion handles expanded and rotated
+conics. When the equation cannot be solved that way, the editor explains that it
+needs to be rewritten as `y = f(x)` or a supported conic.
 
 ## 3D view
 

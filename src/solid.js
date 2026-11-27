@@ -71,6 +71,23 @@ function makeCrestLift(range, radialFn) {
     const width = radial.outer - radial.inner;
     if (width > Math.max(1e-6, radial.outer * 1e-4)) continue;
 
+    // Only round a crest that closes tangentially. A sharp corner, such as
+    // y = x^2 meeting y = 1, must end exactly at its true profile endpoint;
+    // lifting it outward would leave a visible spike past the region.
+    const step = Math.max(span * 0.005, 1e-6);
+    const inside = endpoint === range.max ? endpoint - step : endpoint + step;
+    const near = radialFn(inside);
+    if (!near) continue;
+    if (near.outer - near.inner < 1e-9) continue;
+    const outerSlope = (radial.outer - near.outer) / step;
+    const innerSlope = (radial.inner - near.inner) / step;
+    const slopeScale = Math.max(
+      1,
+      Math.abs(outerSlope),
+      Math.abs(innerSlope),
+    );
+    if (Math.abs(outerSlope - innerSlope) > 0.05 * slopeScale) continue;
+
     const radius = (radial.outer + radial.inner) / 2;
     crests.push({
       u: endpoint,
@@ -91,7 +108,11 @@ function makeCrestLift(range, radialFn) {
       const radial = Math.abs(radius - crest.radius) / crest.radialSpan;
       if (axial >= 1 || radial >= 1) continue;
       const falloff = (1 - axial * axial) ** 2 * (1 - radial * radial) ** 2;
-      result += crest.direction * crest.lift * falloff;
+      const shifted = result + crest.direction * crest.lift * falloff;
+      // Never move a vertex past the region's true axial endpoint. Vertices
+      // too close to the rim keep their exact position instead of piling up
+      // on the boundary, and geometry outside the range reads as a spike.
+      if (shifted >= range.min && shifted <= range.max) result = shifted;
     }
     return result;
   };
@@ -117,6 +138,20 @@ function radialBands(radial) {
 }
 
 /**
+ * The interval at a cusp or a zero-width rim can be undefined exactly at the
+ * endpoint. Take the limit from just inside the range so the surface still
+ * arrives at the true edge instead of stopping short and leaving a tip.
+ */
+function radialLimit(radialFn, range, u) {
+  const radial = radialFn(u);
+  if (radial) return radial;
+  const direction = u <= range.min ? 1 : u >= range.max ? -1 : 0;
+  if (!direction) return null;
+  const epsilon = Math.max((range.max - range.min) * 1e-12, 1e-12);
+  return radialFn(u + direction * epsilon) || null;
+}
+
+/**
  * Sample every radial band along the axis. Textbook regions usually give one
  * band, but a horizontal line through a curve can leave two disjoint lobes in
  * one cell. Those need separate surfaces and separate profiles.
@@ -129,7 +164,7 @@ function bandRows(radialFn, range) {
   const positions = sampleRange(range, segments);
   return positions.map((u) => ({
     u,
-    bands: radialBands(radialFn(u)),
+    bands: radialBands(radialLimit(radialFn, range, u)),
   }));
 }
 
@@ -353,13 +388,8 @@ function buildSurfaceGeometry(radialFn, range, startAngle, which, crestLift) {
     const sin = Math.sin(phi);
     for (let i = 0; i <= segmentsU; i++) {
       const u = samples[i];
-      let radial = radialFn(u);
-      if (!radial) {
-        radial =
-          i === 0 || i === segmentsU
-            ? { inner: 0, outer: 0 }
-            : previous || { inner: 0, outer: 0 };
-      }
+      let radial = radialLimit(radialFn, range, u);
+      if (!radial) radial = previous || { inner: 0, outer: 0 };
       previous = radial;
       const rawRadius = which === "outer" ? radial.outer : radial.inner;
       const radius = rawRadius < 1e-5 ? 0 : rawRadius;
@@ -545,13 +575,8 @@ function buildSidePolygon(radialFn, range, sign, crestLift) {
 
   for (let index = 0; index <= samples; index++) {
     const u = positions[index];
-    let radial = radialFn(u);
-    if (!radial) {
-      radial =
-        index === 0 || index === samples
-          ? { inner: 0, outer: 0 }
-          : previous || { inner: 0, outer: 0 };
-    }
+    let radial = radialLimit(radialFn, range, u);
+    if (!radial) radial = previous || { inner: 0, outer: 0 };
     previous = radial;
     const outerRadius = radial.outer < 1e-5 ? 0 : radial.outer;
     const innerRadius = radial.inner < 1e-5 ? 0 : radial.inner;

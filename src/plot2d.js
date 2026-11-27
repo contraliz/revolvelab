@@ -354,7 +354,7 @@ export class RegionPlot {
     context.clip();
 
     for (const line of this.model.lines) {
-      if (line.implicit) continue;
+      if (line.hidden) continue;
       const color = line.color || "#ff9950";
       if (line.kind === "vertical") {
         const px = this.toScreenX(line.verticalX);
